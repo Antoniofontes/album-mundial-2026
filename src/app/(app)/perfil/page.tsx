@@ -1,0 +1,202 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import type { Profile } from "@/lib/supabase/types";
+import { useCollection } from "@/lib/store";
+import { ALBUM } from "@/lib/album";
+import { LogOut, Share2, Save, Eye, EyeOff, Copy } from "lucide-react";
+import { useRouter } from "next/navigation";
+
+export default function PerfilPage() {
+  const router = useRouter();
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [bio, setBio] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [siteUrl, setSiteUrl] = useState("");
+
+  const collection = useCollection((s) => s.collection);
+  const owned = ALBUM.filter((s) => (collection[s.number] ?? 0) > 0).length;
+  const dups = ALBUM.reduce(
+    (a, s) => a + Math.max(0, (collection[s.number] ?? 0) - 1),
+    0,
+  );
+
+  useEffect(() => {
+    setSiteUrl(window.location.origin);
+    (async () => {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+      if (data) {
+        setProfile(data);
+        setName(data.display_name);
+        setUsername(data.username);
+        setBio(data.bio ?? "");
+        setIsPublic(data.is_public);
+      }
+    })();
+  }, []);
+
+  async function save() {
+    if (!profile) return;
+    setSaving(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        display_name: name,
+        username: username.toLowerCase().replace(/[^a-z0-9_]/g, ""),
+        bio: bio || null,
+        is_public: isPublic,
+      })
+      .eq("id", profile.id);
+    setSaving(false);
+    if (error) alert(error.message);
+    else alert("Guardado!");
+  }
+
+  async function logout() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/");
+  }
+
+  async function share() {
+    if (!profile) return;
+    const url = `${siteUrl}/u/${username}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${name} — Álbum Mundial 2026`,
+          text: `Mirá mi álbum del Mundial 2026: ${owned}/980 figuritas`,
+          url,
+        });
+      } catch {}
+    } else {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
+  if (!profile) {
+    return <div className="p-6 text-center text-sm">Cargando...</div>;
+  }
+
+  const publicUrl = `${siteUrl}/u/${username}`;
+
+  return (
+    <div className="max-w-md mx-auto px-4 pt-6">
+      <header className="flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-black">Mi perfil</h1>
+          <p className="text-sm text-[color:var(--muted)]">
+            Configurá tu cuenta y compartí tu álbum
+          </p>
+        </div>
+        <button onClick={logout} className="btn btn-ghost text-sm text-[color:var(--muted)]">
+          <LogOut className="w-4 h-4" />
+          Salir
+        </button>
+      </header>
+
+      <div className="card mt-4 grid grid-cols-3 gap-3 text-center">
+        <div>
+          <div className="text-2xl font-black text-[color:var(--primary)]">{owned}</div>
+          <div className="text-[10px] uppercase text-[color:var(--muted)]">Tengo</div>
+        </div>
+        <div>
+          <div className="text-2xl font-black text-[color:var(--gold)]">{dups}</div>
+          <div className="text-[10px] uppercase text-[color:var(--muted)]">Repetidas</div>
+        </div>
+        <div>
+          <div className="text-2xl font-black">{980 - owned}</div>
+          <div className="text-[10px] uppercase text-[color:var(--muted)]">Faltan</div>
+        </div>
+      </div>
+
+      <section className="mt-6 grid gap-3">
+        <label className="block">
+          <span className="text-xs uppercase text-[color:var(--muted)]">
+            Nombre visible
+          </span>
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label className="block">
+          <span className="text-xs uppercase text-[color:var(--muted)]">Usuario</span>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="ej: pablito"
+          />
+          <span className="text-[11px] text-[color:var(--muted)]">{publicUrl}</span>
+        </label>
+        <label className="block">
+          <span className="text-xs uppercase text-[color:var(--muted)]">Bio</span>
+          <textarea
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            rows={2}
+            placeholder="ej: vivo en Belgrano, hago intercambios sábados"
+          />
+        </label>
+
+        <div className="card flex justify-between items-center !p-3">
+          <div className="flex items-center gap-2">
+            {isPublic ? (
+              <Eye className="w-4 h-4 text-[color:var(--primary)]" />
+            ) : (
+              <EyeOff className="w-4 h-4 text-[color:var(--muted)]" />
+            )}
+            <div>
+              <div className="text-sm font-semibold">Perfil público</div>
+              <div className="text-[11px] text-[color:var(--muted)]">
+                Aparece en el ranking y se puede ver por link
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsPublic((p) => !p)}
+            className={`btn !px-4 ${
+              isPublic ? "btn-primary" : "btn-secondary"
+            }`}
+          >
+            {isPublic ? "Sí" : "No"}
+          </button>
+        </div>
+
+        <button onClick={save} disabled={saving} className="btn btn-primary py-3">
+          <Save className="w-4 h-4" />
+          {saving ? "Guardando..." : "Guardar"}
+        </button>
+      </section>
+
+      <section className="mt-6">
+        <h2 className="text-xs uppercase text-[color:var(--muted)] mb-2">
+          Compartir mi álbum
+        </h2>
+        <div className="card flex items-center gap-2 !p-3">
+          <span className="text-xs flex-1 truncate text-[color:var(--muted)]">
+            {publicUrl}
+          </span>
+          <button onClick={share} className="btn btn-secondary !px-3">
+            {copied ? <Copy className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+            {copied ? "¡Copiado!" : "Compartir"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
