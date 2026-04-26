@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { Trophy, Search, ScanLine, Users, Sparkles } from "lucide-react";
+import { Trophy, Search, ScanLine, Users, Sparkles, Smartphone } from "lucide-react";
+import { InstallBanner } from "@/components/InstallBanner";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -13,6 +14,7 @@ export default async function Home() {
 
   return (
     <main className="gradient-hero min-h-screen">
+      <InstallBanner />
       <div className="max-w-md mx-auto px-5 pt-12 pb-32">
         <div className="text-center">
           <div className="inline-flex items-center gap-2 mb-3">
@@ -63,6 +65,13 @@ export default async function Home() {
           </Link>
           <Link href="/comunidad" className="btn btn-secondary text-base py-4">
             Entrar como invitado
+          </Link>
+          <Link
+            href="/instalar"
+            className="btn btn-ghost text-sm text-[color:var(--muted)] py-3 inline-flex"
+          >
+            <Smartphone className="w-4 h-4" />
+            Cómo instalarla como app en tu celular
           </Link>
         </div>
 

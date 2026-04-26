@@ -5,7 +5,8 @@ import { createClient } from "@/lib/supabase/client";
 import type { Profile } from "@/lib/supabase/types";
 import { useCollection } from "@/lib/store";
 import { ALBUM } from "@/lib/album";
-import { LogOut, Share2, Save, Eye, EyeOff, Copy } from "lucide-react";
+import { LogOut, Share2, Save, Eye, EyeOff, Copy, Smartphone } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export default function PerfilPage() {
@@ -196,6 +197,23 @@ export default function PerfilPage() {
             {copied ? "¡Copiado!" : "Compartir"}
           </button>
         </div>
+      </section>
+
+      <section className="mt-6">
+        <Link
+          href="/instalar"
+          className="card !p-3 flex items-center gap-3 hover:border-[color:var(--primary)]"
+        >
+          <div className="bg-[color:var(--primary)]/15 rounded-xl p-2">
+            <Smartphone className="w-5 h-5 text-[color:var(--primary)]" />
+          </div>
+          <div className="flex-1">
+            <div className="text-sm font-semibold">Instalar como app</div>
+            <div className="text-[11px] text-[color:var(--muted)]">
+              Paso a paso para iPhone y Android
+            </div>
+          </div>
+        </Link>
       </section>
     </div>
   );
