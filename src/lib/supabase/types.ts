@@ -58,6 +58,7 @@ export type AlbumPage = {
   uploaded_by: string | null;
   kind: AlbumPageKind;
   team_code: string | null;
+  team_sheet: number | null; // 1 o 2 cuando es equipo
   storage_path: string;
   sticker_numbers: number[];
   notes: string | null;

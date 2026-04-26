@@ -17,9 +17,10 @@ import { stickersForContext, describeContext } from "@/lib/album";
 import type { AlbumPage, AlbumPageKind } from "@/lib/supabase/types";
 
 type Slot = {
-  id: string; // unique slot id en el cliente
+  id: string;
   kind: AlbumPageKind;
   teamCode?: string;
+  teamSheet?: 1 | 2;
   label: string;
   stickerNumbers: number[];
   existing?: AlbumPage;
@@ -45,16 +46,20 @@ export default function ReferenciasPage() {
       ),
     });
     for (const t of TEAMS) {
-      out.push({
-        id: `team-${t.code}`,
-        kind: "team",
-        teamCode: t.code,
-        label: `${t.flag} ${t.name}`,
-        stickerNumbers: stickersForContext({
+      for (const sheet of [1, 2] as const) {
+        out.push({
+          id: `team-${t.code}-${sheet}`,
           kind: "team",
           teamCode: t.code,
-        }).map((s) => s.number),
-      });
+          teamSheet: sheet,
+          label: `${t.flag} ${t.name} · hoja ${sheet}`,
+          stickerNumbers: stickersForContext({
+            kind: "team",
+            teamCode: t.code,
+            teamSheet: sheet,
+          }).map((s) => s.number),
+        });
+      }
     }
     out.push({
       id: "stadium",
@@ -128,7 +133,8 @@ export default function ReferenciasPage() {
       const existing = pages.find(
         (p) =>
           p.kind === slot.kind &&
-          (p.team_code ?? null) === (slot.teamCode ?? null),
+          (p.team_code ?? null) === (slot.teamCode ?? null) &&
+          (p.team_sheet ?? null) === (slot.teamSheet ?? null),
       );
       return { ...slot, existing };
     });
@@ -161,7 +167,8 @@ export default function ReferenciasPage() {
       }
 
       const ext = file.name.split(".").pop() || "jpg";
-      const path = `${slot.kind}-${slot.teamCode ?? "all"}-${Date.now()}.${ext}`;
+      const sheetSuffix = slot.teamSheet ? `-h${slot.teamSheet}` : "";
+      const path = `${slot.kind}-${slot.teamCode ?? "all"}${sheetSuffix}-${Date.now()}.${ext}`;
 
       // Si ya existe, eliminamos la foto vieja del storage primero
       if (slot.existing) {
@@ -201,6 +208,7 @@ export default function ReferenciasPage() {
         const { error: insErr } = await supabase.from("album_pages").insert({
           kind: slot.kind,
           team_code: slot.teamCode ?? null,
+          team_sheet: slot.teamSheet ?? null,
           storage_path: path,
           sticker_numbers: slot.stickerNumbers,
           uploaded_by: user.id,
@@ -222,7 +230,8 @@ export default function ReferenciasPage() {
       const newRow = (data ?? []).find(
         (p) =>
           p.kind === slot.kind &&
-          (p.team_code ?? null) === (slot.teamCode ?? null),
+          (p.team_code ?? null) === (slot.teamCode ?? null) &&
+          (p.team_sheet ?? null) === (slot.teamSheet ?? null),
       );
       if (newRow) {
         const { data: s } = await supabase.storage
@@ -321,7 +330,11 @@ export default function ReferenciasPage() {
           const isBusy = busy === slot.id;
           const ctxLabel = describeContext(
             slot.kind === "team"
-              ? { kind: "team", teamCode: slot.teamCode }
+              ? {
+                  kind: "team",
+                  teamCode: slot.teamCode,
+                  teamSheet: slot.teamSheet,
+                }
               : { kind: slot.kind },
           );
           return (

@@ -90,6 +90,9 @@ export async function POST(req: Request) {
         .eq("kind", context.kind);
       if (context.kind === "team" && context.teamCode) {
         refQuery = refQuery.eq("team_code", context.teamCode);
+        if (context.teamSheet) {
+          refQuery = refQuery.eq("team_sheet", context.teamSheet);
+        }
       }
       const { data: refRows } = await refQuery
         .limit(1)

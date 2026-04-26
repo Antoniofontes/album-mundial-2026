@@ -46,6 +46,7 @@ export default function ScanPage() {
   const [running, setRunning] = useState(false);
   const [ctxKind, setCtxKind] = useState<ScanContext["kind"]>("team");
   const [teamCode, setTeamCode] = useState<string>("ARG");
+  const [teamSheet, setTeamSheet] = useState<1 | 2>(1);
   const [showDebugFor, setShowDebugFor] = useState<string | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -54,8 +55,11 @@ export default function ScanPage() {
   const bulkAdd = useCollection((s) => s.bulkAdd);
 
   const ctx: ScanContext = useMemo(
-    () => (ctxKind === "team" ? { kind: "team", teamCode } : { kind: ctxKind }),
-    [ctxKind, teamCode],
+    () =>
+      ctxKind === "team"
+        ? { kind: "team", teamCode, teamSheet }
+        : { kind: ctxKind },
+    [ctxKind, teamCode, teamSheet],
   );
   const candidates = useMemo(() => stickersForContext(ctx), [ctx]);
 
@@ -324,17 +328,36 @@ export default function ScanPage() {
         </div>
 
         {ctxKind === "team" && (
-          <select
-            value={teamCode}
-            onChange={(e) => setTeamCode(e.target.value)}
-            className="w-full rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm"
-          >
-            {TEAMS.map((t) => (
-              <option key={t.code} value={t.code}>
-                {t.flag} {t.name} (Grupo {t.group})
-              </option>
-            ))}
-          </select>
+          <div className="space-y-2">
+            <select
+              value={teamCode}
+              onChange={(e) => setTeamCode(e.target.value)}
+              className="w-full rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm"
+            >
+              {TEAMS.map((t) => (
+                <option key={t.code} value={t.code}>
+                  {t.flag} {t.name} (Grupo {t.group})
+                </option>
+              ))}
+            </select>
+            <div className="grid grid-cols-2 gap-2">
+              {[1, 2].map((sheet) => (
+                <button
+                  key={sheet}
+                  onClick={() => setTeamSheet(sheet as 1 | 2)}
+                  className={`text-xs px-3 py-2 rounded-lg border transition ${
+                    teamSheet === sheet
+                      ? "bg-[color:var(--primary)] border-[color:var(--primary)] text-black font-bold"
+                      : "border-[color:var(--card-border)] text-[color:var(--fg)]"
+                  }`}
+                >
+                  {sheet === 1
+                    ? "Hoja 1 (escudo + 1ª mitad)"
+                    : "Hoja 2 (2ª mitad)"}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
 
         <p className="text-[11px] text-[color:var(--muted)] mt-2">

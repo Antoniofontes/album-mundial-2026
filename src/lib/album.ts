@@ -379,17 +379,37 @@ export type ScanContextKind =
 export type ScanContext = {
   kind: ScanContextKind;
   teamCode?: string;
+  /** 1 = hoja izquierda (escudo + 9 jugadores), 2 = hoja derecha (9 jugadores) */
+  teamSheet?: 1 | 2;
 };
 
 /**
+ * Si una página de equipo se reparte en 2 hojas físicas:
+ * Hoja 1 = escudo + 9 jugadores (10 cromos)
+ * Hoja 2 = 9 jugadores restantes
+ * (Si más adelante el reparto real es distinto se ajusta acá nomás).
+ */
+export function splitTeamSheet(stickers: Sticker[], sheet: 1 | 2): Sticker[] {
+  if (stickers.length === 0) return stickers;
+  const [logo, ...players] = stickers;
+  if (sheet === 1) {
+    return [logo, ...players.slice(0, 9)];
+  }
+  return players.slice(9);
+}
+
+/**
  * Devuelve la lista de figuritas que pueden aparecer en la página
- * indicada por el contexto (lo que el usuario marca antes de subir
- * la foto). Si es "auto" (no sabemos), devuelve todo el álbum.
+ * indicada por el contexto.
  */
 export function stickersForContext(ctx: ScanContext): Sticker[] {
   switch (ctx.kind) {
-    case "team":
-      return ctx.teamCode ? stickersOfTeam(ctx.teamCode) : [];
+    case "team": {
+      if (!ctx.teamCode) return [];
+      const all = stickersOfTeam(ctx.teamCode);
+      if (ctx.teamSheet) return splitTeamSheet(all, ctx.teamSheet);
+      return all;
+    }
     case "intro":
       return ALBUM.filter((s) => s.type === "intro");
     case "stadium":
@@ -410,7 +430,11 @@ export function describeContext(ctx: ScanContext): string {
   switch (ctx.kind) {
     case "team": {
       const team = TEAMS.find((t) => t.code === ctx.teamCode);
-      return team ? `Equipo: ${team.flag} ${team.name}` : "Equipo desconocido";
+      if (!team) return "Equipo desconocido";
+      const base = `${team.flag} ${team.name}`;
+      if (ctx.teamSheet === 1) return `${base} · hoja 1 (escudo + 1ª mitad)`;
+      if (ctx.teamSheet === 2) return `${base} · hoja 2 (2ª mitad)`;
+      return `${base} (sin hoja específica)`;
     }
     case "intro":
       return "Sección: Introducción / FIFA / Mascotas";
@@ -419,7 +443,7 @@ export function describeContext(ctx: ScanContext): string {
     case "coca_cola":
       return "Sección: Especiales Coca-Cola";
     case "legend":
-      return "Sección: Leyendas del Mundial";
+      return "Sección: Campeones del Mundo / Leyendas";
     case "special":
       return "Sección: Brillantes / Foil finales";
     case "auto":
