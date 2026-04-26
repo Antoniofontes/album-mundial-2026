@@ -45,6 +45,26 @@ export type Scan = {
   created_at: string;
 };
 
+export type AlbumPageKind =
+  | "team"
+  | "intro"
+  | "stadium"
+  | "coca_cola"
+  | "legend"
+  | "special";
+
+export type AlbumPage = {
+  id: string;
+  uploaded_by: string | null;
+  kind: AlbumPageKind;
+  team_code: string | null;
+  storage_path: string;
+  sticker_numbers: number[];
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type UserStats = {
   user_id: string;
   username: string;
@@ -91,6 +111,12 @@ export type Database = {
         Scan,
         Partial<Scan> & Pick<Scan, "user_id" | "storage_path">,
         Partial<Scan>
+      >;
+      album_pages: TableShape<
+        AlbumPage,
+        Partial<AlbumPage> &
+          Pick<AlbumPage, "kind" | "storage_path" | "sticker_numbers">,
+        Partial<AlbumPage>
       >;
     };
     Views: {

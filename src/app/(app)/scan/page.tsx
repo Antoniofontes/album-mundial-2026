@@ -1,203 +1,590 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useCollection } from "@/lib/store";
-import { Camera, Upload, Loader2, Check, X } from "lucide-react";
-import { ALBUM_BY_NUMBER } from "@/lib/album";
+import {
+  Camera,
+  Upload,
+  Loader2,
+  Check,
+  X,
+  History,
+  ChevronDown,
+  Image as ImageIcon,
+  ImagePlus,
+  Library,
+} from "lucide-react";
+import {
+  ALBUM_BY_NUMBER,
+  describeContext,
+  stickersForContext,
+  type ScanContext,
+} from "@/lib/album";
+import { TEAMS } from "@/lib/teams";
 
-type Phase = "idle" | "uploading" | "scanning" | "result" | "error";
+type JobStatus = "queued" | "uploading" | "scanning" | "done" | "error";
+
+type Job = {
+  id: string;
+  file: File;
+  previewUrl: string;
+  status: JobStatus;
+  error?: string;
+  detected?: number[];
+  contextDescription?: string;
+  candidatesCount?: number;
+  durationMs?: number;
+  reqId?: string;
+  raw?: string;
+  usedReference?: boolean;
+};
 
 export default function ScanPage() {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [detected, setDetected] = useState<number[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [running, setRunning] = useState(false);
+  const [ctxKind, setCtxKind] = useState<ScanContext["kind"]>("team");
+  const [teamCode, setTeamCode] = useState<string>("ARG");
+  const [showDebugFor, setShowDebugFor] = useState<string | null>(null);
+
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+
   const bulkAdd = useCollection((s) => s.bulkAdd);
 
-  async function handleFile(file: File) {
-    setError(null);
-    setDetected([]);
-    setPhase("uploading");
+  const ctx: ScanContext = useMemo(
+    () => (ctxKind === "team" ? { kind: "team", teamCode } : { kind: ctxKind }),
+    [ctxKind, teamCode],
+  );
+  const candidates = useMemo(() => stickersForContext(ctx), [ctx]);
 
-    const reader = new FileReader();
-    reader.onload = (e) => setPreviewUrl(e.target?.result as string);
-    reader.readAsDataURL(file);
+  function addFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const newJobs: Job[] = Array.from(files).map((f) => ({
+      id: Math.random().toString(36).slice(2),
+      file: f,
+      previewUrl: URL.createObjectURL(f),
+      status: "queued",
+    }));
+    setJobs((prev) => [...prev, ...newJobs]);
+  }
 
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      setError("Necesitás estar logueado");
-      setPhase("error");
-      return;
+  async function processQueue() {
+    if (running) return;
+    setRunning(true);
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.status === "queued"
+              ? { ...j, status: "error", error: "Necesitás estar logueado" }
+              : j,
+          ),
+        );
+        return;
+      }
+
+      while (true) {
+        const next = await new Promise<Job | null>((resolve) => {
+          setJobs((prev) => {
+            const j = prev.find((x) => x.status === "queued");
+            resolve(j ?? null);
+            return prev;
+          });
+        });
+        if (!next) break;
+        await processJob(next.id, ctx, supabase, user.id);
+      }
+    } finally {
+      setRunning(false);
     }
+  }
 
-    const ext = file.name.split(".").pop() || "jpg";
-    const path = `${user.id}/${Date.now()}.${ext}`;
+  async function processJob(
+    jobId: string,
+    snapshotCtx: ScanContext,
+    supabase: ReturnType<typeof createClient>,
+    userId: string,
+  ) {
+    setJobs((prev) =>
+      prev.map((j) => (j.id === jobId ? { ...j, status: "uploading" } : j)),
+    );
+    const job = await new Promise<Job | undefined>((res) =>
+      setJobs((prev) => {
+        res(prev.find((j) => j.id === jobId));
+        return prev;
+      }),
+    );
+    if (!job) return;
+
+    const ext = job.file.name.split(".").pop() || "jpg";
+    const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
     const { error: upErr } = await supabase.storage
       .from("album-scans")
-      .upload(path, file, {
-        contentType: file.type || "image/jpeg",
+      .upload(path, job.file, {
+        contentType: job.file.type || "image/jpeg",
         upsert: false,
       });
     if (upErr) {
-      setError("Error subiendo: " + upErr.message);
-      setPhase("error");
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? { ...j, status: "error", error: "Subida: " + upErr.message }
+            : j,
+        ),
+      );
       return;
     }
 
-    setPhase("scanning");
+    setJobs((prev) =>
+      prev.map((j) => (j.id === jobId ? { ...j, status: "scanning" } : j)),
+    );
+
     const { data: scanRow, error: insErr } = await supabase
       .from("scans")
-      .insert({ user_id: user.id, storage_path: path, status: "processing" })
+      .insert({ user_id: userId, storage_path: path, status: "processing" })
       .select()
       .single();
     if (insErr || !scanRow) {
-      setError("Error creando scan");
-      setPhase("error");
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                status: "error",
+                error: "DB: " + (insErr?.message ?? "no row"),
+              }
+            : j,
+        ),
+      );
       return;
     }
 
-    const res = await fetch("/api/scan", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scanId: scanRow.id, storagePath: path }),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      setError("La IA no pudo procesar la imagen: " + t);
-      setPhase("error");
-      return;
+    try {
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scanId: scanRow.id,
+          storagePath: path,
+          context: snapshotCtx,
+        }),
+      });
+      const json = (await res.json()) as
+        | {
+            reqId: string;
+            detected: number[];
+            contextDescription: string;
+            candidatesCount: number;
+            durationMs: number;
+            raw: string;
+            usedReference: boolean;
+          }
+        | { error: string; reqId?: string };
+
+      if (!res.ok || "error" in json) {
+        const msg = "error" in json ? json.error : "error";
+        const rid = "reqId" in json && json.reqId ? ` (req ${json.reqId})` : "";
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.id === jobId
+              ? { ...j, status: "error", error: msg + rid }
+              : j,
+          ),
+        );
+        return;
+      }
+
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                status: "done",
+                detected: json.detected,
+                contextDescription: json.contextDescription,
+                candidatesCount: json.candidatesCount,
+                durationMs: json.durationMs,
+                reqId: json.reqId,
+                raw: json.raw,
+                usedReference: json.usedReference,
+              }
+            : j,
+        ),
+      );
+    } catch (e) {
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                status: "error",
+                error: e instanceof Error ? e.message : "fetch error",
+              }
+            : j,
+        ),
+      );
     }
-    const json = (await res.json()) as { detected: number[] };
-    setDetected(json.detected ?? []);
-    setPhase("result");
   }
 
-  async function applyDetected() {
-    if (detected.length === 0) return;
-    await bulkAdd(detected);
-    alert(`Se marcaron ${detected.length} figuritas como "tengo"`);
-    setPhase("idle");
-    setDetected([]);
-    setPreviewUrl(null);
+  const queuedCount = jobs.filter((j) => j.status === "queued").length;
+  const allDetected = useMemo(() => {
+    const set = new Set<number>();
+    for (const j of jobs) {
+      if (j.status === "done" && j.detected) {
+        for (const n of j.detected) set.add(n);
+      }
+    }
+    return Array.from(set).sort((a, b) => a - b);
+  }, [jobs]);
+
+  async function applyAll() {
+    if (allDetected.length === 0) return;
+    await bulkAdd(allDetected);
+    alert(
+      `Se marcaron ${allDetected.length} figuritas distintas como "tengo".`,
+    );
+    setJobs([]);
+  }
+
+  function removeJob(id: string) {
+    setJobs((prev) => prev.filter((j) => j.id !== id));
+  }
+
+  function clearAll() {
+    setJobs([]);
   }
 
   return (
-    <div className="max-w-md mx-auto px-4 pt-6">
-      <header>
-        <h1 className="text-2xl font-black flex items-center gap-2">
-          <Camera className="w-6 h-6" /> Escanear álbum
-        </h1>
-        <p className="text-sm text-[color:var(--muted)] mt-1">
-          Sacale una foto a una página y la IA detecta qué tenés.
-        </p>
+    <div className="max-w-md mx-auto px-4 pt-6 pb-32">
+      <header className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-black flex items-center gap-2">
+            <Camera className="w-6 h-6" /> Escanear álbum
+          </h1>
+          <p className="text-sm text-[color:var(--muted)] mt-1">
+            Subí fotos de tus páginas. Las procesa con IA, una por una.
+          </p>
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <Link
+            href="/scan/referencias"
+            className="btn btn-secondary text-xs !px-2 !py-1"
+            title="Páginas de referencia (álbum vacío)"
+          >
+            <Library className="w-4 h-4" />
+          </Link>
+          <Link
+            href="/scan/historial"
+            className="btn btn-secondary text-xs !px-2 !py-1"
+            title="Historial"
+          >
+            <History className="w-4 h-4" />
+          </Link>
+        </div>
       </header>
 
-      {(phase === "idle" || phase === "error") && (
-        <div className="card mt-6 text-center !p-6">
-          <Upload className="w-12 h-12 mx-auto text-[color:var(--muted)]" />
-          <p className="mt-3 text-sm">
-            Subí o sacá una foto de tu álbum bien iluminada y plana.
-          </p>
-          <label className="btn btn-primary mt-4 inline-flex">
-            <Camera className="w-4 h-4" />
-            Tomar / Elegir foto
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleFile(f);
-              }}
-            />
-          </label>
-          {error && (
-            <p className="text-sm text-[color:var(--accent)] mt-3">{error}</p>
-          )}
+      {/* Selector de contexto */}
+      <div className="card mt-4 !p-4">
+        <h2 className="font-semibold text-sm mb-2">
+          ¿Qué página estás escaneando?
+        </h2>
+        <p className="text-xs text-[color:var(--muted)] mb-3">
+          La IA solo busca entre los números de la página elegida. Si subís
+          varias fotos de equipos distintos, hacelo de a tandas.
+        </p>
+
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          {[
+            { v: "team", label: "Selección" },
+            { v: "intro", label: "Intro / FIFA" },
+            { v: "stadium", label: "Estadios" },
+            { v: "coca_cola", label: "Coca-Cola" },
+            { v: "legend", label: "Leyendas" },
+            { v: "special", label: "Brillantes" },
+            { v: "auto", label: "Auto-detectar" },
+          ].map((opt) => (
+            <button
+              key={opt.v}
+              onClick={() => setCtxKind(opt.v as ScanContext["kind"])}
+              className={`text-xs px-3 py-2 rounded-lg border transition ${
+                ctxKind === opt.v
+                  ? "bg-[color:var(--primary)] border-[color:var(--primary)] text-black font-bold"
+                  : "border-[color:var(--card-border)] text-[color:var(--fg)]"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
-      )}
 
-      {(phase === "uploading" || phase === "scanning") && (
-        <div className="card mt-6 text-center !p-6">
-          <Loader2 className="w-10 h-10 mx-auto animate-spin text-[color:var(--primary)]" />
-          <p className="mt-3 font-semibold">
-            {phase === "uploading" ? "Subiendo foto..." : "La IA está mirando tu álbum..."}
-          </p>
-          <p className="text-xs text-[color:var(--muted)] mt-1">
-            Puede tardar 10-30 segundos.
-          </p>
-          {previewUrl && (
-            <img src={previewUrl} alt="" className="mt-4 rounded-xl max-h-60 mx-auto" />
-          )}
+        {ctxKind === "team" && (
+          <select
+            value={teamCode}
+            onChange={(e) => setTeamCode(e.target.value)}
+            className="w-full rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm"
+          >
+            {TEAMS.map((t) => (
+              <option key={t.code} value={t.code}>
+                {t.flag} {t.name} (Grupo {t.group})
+              </option>
+            ))}
+          </select>
+        )}
+
+        <p className="text-[11px] text-[color:var(--muted)] mt-2">
+          {describeContext(ctx)} · {candidates.length} figuritas posibles
+          {candidates.length > 0 &&
+            ctxKind !== "auto" &&
+            ` (#${candidates[0].number}–#${candidates[candidates.length - 1].number})`}
+        </p>
+      </div>
+
+      {/* Selector de fotos: cámara + galería, MULTIPLE */}
+      <div className="card mt-3 !p-4">
+        <p className="text-sm font-semibold mb-2">Agregar fotos</p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => cameraInputRef.current?.click()}
+            disabled={running}
+            className="btn btn-primary disabled:opacity-50"
+          >
+            <Camera className="w-4 h-4" /> Cámara
+          </button>
+          <button
+            onClick={() => galleryInputRef.current?.click()}
+            disabled={running}
+            className="btn btn-secondary disabled:opacity-50"
+          >
+            <ImagePlus className="w-4 h-4" /> Galería
+          </button>
         </div>
-      )}
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => {
+            addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <input
+          ref={galleryInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <p className="text-[11px] text-[color:var(--muted)] mt-2">
+          Podés agregar varias y se procesan en cola, una por una.
+        </p>
+      </div>
 
-      {phase === "result" && (
-        <div className="mt-6">
-          <div className="card !p-4">
-            <h2 className="font-bold">
-              {detected.length === 0
-                ? "No detecté figuritas"
-                : `Detecté ${detected.length} figuritas pegadas`}
-            </h2>
-            {previewUrl && (
-              <img
-                src={previewUrl}
-                alt=""
-                className="mt-3 rounded-xl max-h-48 mx-auto"
-              />
-            )}
-
-            {detected.length > 0 && (
-              <ul className="grid grid-cols-3 gap-2 mt-4">
-                {detected.map((n) => {
-                  const s = ALBUM_BY_NUMBER[n];
-                  return (
-                    <li
-                      key={n}
-                      className="rounded-lg border border-[color:var(--card-border)] p-2 text-center"
-                    >
-                      <div className="text-lg font-black">{n}</div>
-                      <div className="text-[10px] text-[color:var(--muted)] truncate">
-                        {s?.name ?? "Desconocida"}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-
-            <div className="grid grid-cols-2 gap-2 mt-4">
+      {/* Cola */}
+      {jobs.length > 0 && (
+        <div className="mt-4">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <p className="text-sm font-semibold">
+              {jobs.length} foto{jobs.length === 1 ? "" : "s"}
+              {queuedCount > 0 && ` · ${queuedCount} en cola`}
+            </p>
+            <div className="flex gap-2">
               <button
-                onClick={() => {
-                  setPhase("idle");
-                  setPreviewUrl(null);
-                  setDetected([]);
-                }}
-                className="btn btn-secondary"
+                onClick={clearAll}
+                disabled={running}
+                className="text-xs text-[color:var(--muted)] disabled:opacity-50"
               >
-                <X className="w-4 h-4" /> Cancelar
+                Limpiar
               </button>
               <button
-                onClick={applyDetected}
-                disabled={detected.length === 0}
-                className="btn btn-primary disabled:opacity-50"
+                onClick={processQueue}
+                disabled={running || queuedCount === 0}
+                className="btn btn-primary text-xs !px-3 !py-1.5 disabled:opacity-50"
               >
-                <Check className="w-4 h-4" /> Marcar como tengo
+                {running ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" /> Procesando
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-3 h-3" /> Procesar {queuedCount}
+                  </>
+                )}
               </button>
             </div>
           </div>
 
-          <p className="text-xs text-[color:var(--muted)] mt-3 text-center">
-            La IA puede equivocarse. Revisá el resultado antes de aplicar.
+          <ul className="space-y-3">
+            {jobs.map((job) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                onRemove={() => removeJob(job.id)}
+                showDebug={showDebugFor === job.id}
+                onToggleDebug={() =>
+                  setShowDebugFor((cur) => (cur === job.id ? null : job.id))
+                }
+              />
+            ))}
+          </ul>
+
+          {allDetected.length > 0 && (
+            <div className="card mt-4 !p-4 sticky bottom-20">
+              <p className="text-sm">
+                Total detectado: <b>{allDetected.length}</b> figuritas únicas.
+              </p>
+              <button
+                onClick={applyAll}
+                className="btn btn-primary mt-2 w-full"
+              >
+                <Check className="w-4 h-4" /> Marcar todas como tengo
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {jobs.length === 0 && (
+        <div className="card mt-3 text-center !p-6">
+          <ImageIcon className="w-12 h-12 mx-auto text-[color:var(--muted)]" />
+          <p className="mt-3 text-sm text-[color:var(--muted)]">
+            Todavía no agregaste ninguna foto.
           </p>
         </div>
       )}
     </div>
+  );
+}
+
+function JobCard({
+  job,
+  onRemove,
+  showDebug,
+  onToggleDebug,
+}: {
+  job: Job;
+  onRemove: () => void;
+  showDebug: boolean;
+  onToggleDebug: () => void;
+}) {
+  return (
+    <li className="card !p-3">
+      <div className="flex gap-3">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={job.previewUrl}
+          alt=""
+          className="w-20 h-20 rounded-lg object-cover shrink-0"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <StatusPill status={job.status} />
+            {job.status !== "uploading" && job.status !== "scanning" && (
+              <button
+                onClick={onRemove}
+                className="text-[color:var(--muted)]"
+                title="Quitar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          {job.status === "queued" && (
+            <p className="text-xs text-[color:var(--muted)] mt-1 truncate">
+              {job.file.name}
+            </p>
+          )}
+          {(job.status === "uploading" || job.status === "scanning") && (
+            <p className="text-xs text-[color:var(--muted)] mt-1 flex items-center gap-1">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              {job.status === "uploading" ? "Subiendo..." : "IA mirando..."}
+            </p>
+          )}
+          {job.status === "error" && (
+            <p className="text-xs text-[color:var(--accent)] mt-1 break-words">
+              {job.error}
+            </p>
+          )}
+          {job.status === "done" && (
+            <>
+              <p className="text-xs mt-1">
+                <b>{job.detected?.length ?? 0}</b> figuritas detectadas
+              </p>
+              <p className="text-[11px] text-[color:var(--muted)] truncate">
+                {job.contextDescription}
+                {job.usedReference ? " · con referencia" : ""}
+              </p>
+              {(job.detected?.length ?? 0) > 0 && (
+                <p className="text-[11px] mt-1 line-clamp-2">
+                  {job.detected!
+                    .slice(0, 8)
+                    .map(
+                      (n) => `#${n} ${ALBUM_BY_NUMBER[n]?.name ?? ""}`.trim(),
+                    )
+                    .join(" · ")}
+                  {(job.detected?.length ?? 0) > 8
+                    ? ` · +${(job.detected?.length ?? 0) - 8}`
+                    : ""}
+                </p>
+              )}
+              <button
+                onClick={onToggleDebug}
+                className="mt-1 text-[10px] text-[color:var(--muted)] flex items-center gap-1"
+              >
+                <ChevronDown
+                  className={`w-3 h-3 transition ${showDebug ? "rotate-180" : ""}`}
+                />
+                {showDebug ? "Ocultar" : "Ver"} detalles
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {job.status === "done" && showDebug && (
+        <div className="mt-2 pt-2 border-t border-[color:var(--card-border)] text-[10px] font-mono space-y-0.5">
+          <div>reqId: {job.reqId}</div>
+          <div>duración: {job.durationMs}ms</div>
+          <div>candidatos: {job.candidatesCount}</div>
+          <div>referencia: {job.usedReference ? "sí" : "no"}</div>
+          <details className="mt-1">
+            <summary className="cursor-pointer text-[color:var(--muted)]">
+              raw response
+            </summary>
+            <pre className="mt-1 whitespace-pre-wrap break-all max-h-40 overflow-auto">
+              {job.raw}
+            </pre>
+          </details>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function StatusPill({ status }: { status: JobStatus }) {
+  const map: Record<JobStatus, { label: string; cls: string }> = {
+    queued: { label: "en cola", cls: "bg-yellow-500/15 text-yellow-400" },
+    uploading: { label: "subiendo", cls: "bg-blue-500/15 text-blue-400" },
+    scanning: { label: "analizando", cls: "bg-purple-500/15 text-purple-400" },
+    done: { label: "OK", cls: "bg-emerald-500/15 text-emerald-400" },
+    error: { label: "error", cls: "bg-red-500/15 text-red-400" },
+  };
+  const m = map[status];
+  return (
+    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${m.cls}`}>
+      {m.label}
+    </span>
   );
 }

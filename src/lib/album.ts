@@ -366,3 +366,64 @@ export function stickersOfTeam(teamCode: string): Sticker[] {
 export function totalStickers(): number {
   return ALBUM.length;
 }
+
+export type ScanContextKind =
+  | "team"
+  | "intro"
+  | "stadium"
+  | "coca_cola"
+  | "legend"
+  | "special"
+  | "auto";
+
+export type ScanContext = {
+  kind: ScanContextKind;
+  teamCode?: string;
+};
+
+/**
+ * Devuelve la lista de figuritas que pueden aparecer en la página
+ * indicada por el contexto (lo que el usuario marca antes de subir
+ * la foto). Si es "auto" (no sabemos), devuelve todo el álbum.
+ */
+export function stickersForContext(ctx: ScanContext): Sticker[] {
+  switch (ctx.kind) {
+    case "team":
+      return ctx.teamCode ? stickersOfTeam(ctx.teamCode) : [];
+    case "intro":
+      return ALBUM.filter((s) => s.type === "intro");
+    case "stadium":
+      return ALBUM.filter((s) => s.type === "stadium");
+    case "coca_cola":
+      return ALBUM.filter((s) => s.type === "coca_cola");
+    case "legend":
+      return ALBUM.filter((s) => s.type === "legend");
+    case "special":
+      return ALBUM.filter((s) => s.type === "special");
+    case "auto":
+    default:
+      return ALBUM;
+  }
+}
+
+export function describeContext(ctx: ScanContext): string {
+  switch (ctx.kind) {
+    case "team": {
+      const team = TEAMS.find((t) => t.code === ctx.teamCode);
+      return team ? `Equipo: ${team.flag} ${team.name}` : "Equipo desconocido";
+    }
+    case "intro":
+      return "Sección: Introducción / FIFA / Mascotas";
+    case "stadium":
+      return "Sección: Estadios / Sedes 2026";
+    case "coca_cola":
+      return "Sección: Especiales Coca-Cola";
+    case "legend":
+      return "Sección: Leyendas del Mundial";
+    case "special":
+      return "Sección: Brillantes / Foil finales";
+    case "auto":
+    default:
+      return "Auto-detectar (toda página)";
+  }
+}
