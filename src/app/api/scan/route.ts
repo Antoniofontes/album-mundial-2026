@@ -8,6 +8,7 @@ import {
   type ScanContext,
   type Sticker,
 } from "@/lib/album";
+import { TEAMS } from "@/lib/teams";
 import type { AlbumPage } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
@@ -81,18 +82,109 @@ export async function POST(req: Request) {
       compressed_resized_to: userImage.resizedTo,
     });
 
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const model = "claude-sonnet-4-5";
+
+    // 1.5) Si el contexto es "auto", primero identificamos la página.
+    let workingContext: ScanContext = context;
+    let autoIdentified: { kind: string; teamCode?: string; teamSheet?: number; raw?: string } | null = null;
+    if (context.kind === "auto") {
+      log("auto-identify: calling Claude to detect page kind");
+      const idStarted = Date.now();
+      try {
+        const idMsg = await client.messages.create({
+          model,
+          max_tokens: 200,
+          system: `Identificás qué página del álbum Panini "FIFA World Cup 2026" muestra una foto.
+
+El álbum tiene 980 figuritas:
+- 48 selecciones × 20 figuritas. Cada selección ocupa 2 hojas:
+  - HOJA 1: escudo de la selección + foto grupal del equipo + 9 jugadores (11 cromos)
+  - HOJA 2: 9 jugadores (9 cromos)
+- 12 cromos exclusivos de Coca-Cola (961-972)
+- 8 cromos especiales / portada / mascotas / etc. (973-980)
+
+Códigos de selección posibles: ${TEAMS.map((t) => `${t.code}=${t.name}`).join(", ")}.
+
+Devolvés SOLO un JSON: { "kind": "team"|"coca_cola"|"special"|"unknown", "teamCode": "<codigo>"|null, "teamSheet": 1|2|null, "reason": "<breve>" }.
+
+Reglas:
+- Si ves un escudo grande de selección + foto grupal: kind="team", teamSheet=1.
+- Si ves solo jugadores en cuadrícula sin escudo grande: kind="team", teamSheet=2 (y el teamCode lo deducís por las caras/colores/letras del badge en cada cromo).
+- Si ves logos de Coca-Cola o cromos con marco rojo Coca-Cola: kind="coca_cola".
+- Si ves la portada del álbum, mascotas, copa/pelota, países sede, campeones del mundo: kind="special" (o "unknown" si no estás seguro).
+- Sin markdown, sin texto fuera del JSON.`,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: userImage.mediaType,
+                    data: userImage.b64,
+                  },
+                },
+                {
+                  type: "text",
+                  text: "¿Qué página es? Devolvé solo el JSON.",
+                },
+              ],
+            },
+          ],
+        });
+        const idText = idMsg.content
+          .filter((c) => c.type === "text")
+          .map((c) => (c as { type: "text"; text: string }).text)
+          .join("");
+        log("auto-identify done", {
+          durationMs: Date.now() - idStarted,
+          input_tokens: idMsg.usage?.input_tokens,
+          output_tokens: idMsg.usage?.output_tokens,
+          raw: idText,
+        });
+        const parsed = parseIdentify(idText);
+        if (parsed) {
+          autoIdentified = { ...parsed, raw: idText };
+          if (parsed.kind === "team" && parsed.teamCode) {
+            const validCode = TEAMS.find((t) => t.code === parsed.teamCode);
+            if (validCode) {
+              workingContext = {
+                kind: "team",
+                teamCode: parsed.teamCode,
+                teamSheet: (parsed.teamSheet ?? 1) as 1 | 2,
+              };
+              log("auto-identify -> team", workingContext);
+            }
+          } else if (parsed.kind === "coca_cola") {
+            workingContext = { kind: "coca_cola" };
+            log("auto-identify -> coca_cola");
+          } else if (parsed.kind === "special") {
+            workingContext = { kind: "special" };
+            log("auto-identify -> special");
+          } else {
+            log("auto-identify -> unknown, keeping auto");
+          }
+        }
+      } catch (e) {
+        const m = e instanceof Error ? e.message : "auto-identify failed";
+        errLog("auto-identify error", m);
+      }
+    }
+
     // 2) Imagen de referencia (álbum vacío) si existe para este contexto
     let reference: { b64: string; mediaType: SupportedMedia } | null = null;
     let resolvedCustomNumbers: number[] | null = null;
     let resolvedCustomLabel: string | null = null;
-    if (context.kind !== "auto") {
+    if (workingContext.kind !== "auto") {
       let refRow: AlbumPage | undefined;
-      if (context.kind === "custom") {
-        if (context.customId) {
+      if (workingContext.kind === "custom") {
+        if (workingContext.customId) {
           const { data: refRows } = await supabase
             .from("album_pages")
             .select("*")
-            .eq("id", context.customId)
+            .eq("id", workingContext.customId)
             .limit(1)
             .returns<AlbumPage[]>();
           refRow = refRows?.[0];
@@ -105,11 +197,11 @@ export async function POST(req: Request) {
         let refQuery = supabase
           .from("album_pages")
           .select("*")
-          .eq("kind", context.kind);
-        if (context.kind === "team" && context.teamCode) {
-          refQuery = refQuery.eq("team_code", context.teamCode);
-          if (context.teamSheet) {
-            refQuery = refQuery.eq("team_sheet", context.teamSheet);
+          .eq("kind", workingContext.kind);
+        if (workingContext.kind === "team" && workingContext.teamCode) {
+          refQuery = refQuery.eq("team_code", workingContext.teamCode);
+          if (workingContext.teamSheet) {
+            refQuery = refQuery.eq("team_sheet", workingContext.teamSheet);
           }
         }
         const { data: refRows } = await refQuery
@@ -143,14 +235,14 @@ export async function POST(req: Request) {
 
     // Lista cerrada de figuritas válidas para esa página
     const enrichedCtx: ScanContext =
-      context.kind === "custom" && resolvedCustomNumbers
+      workingContext.kind === "custom" && resolvedCustomNumbers
         ? {
-            ...context,
+            ...workingContext,
             customNumbers: resolvedCustomNumbers,
             customLabel:
-              context.customLabel ?? resolvedCustomLabel ?? undefined,
+              workingContext.customLabel ?? resolvedCustomLabel ?? undefined,
           }
-        : context;
+        : workingContext;
     const candidates = stickersForContext(enrichedCtx);
     const validNumbers = candidates.map((s) => s.number);
     log("context candidates", {
@@ -165,9 +257,7 @@ export async function POST(req: Request) {
       !!reference,
     );
 
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const model = "claude-sonnet-4-5";
-    log("calling Anthropic", { model });
+    log("calling Anthropic for detection", { model });
 
     const messageContent: Anthropic.Messages.ContentBlockParam[] = [];
     if (reference) {
@@ -233,7 +323,7 @@ export async function POST(req: Request) {
     let detected = parseDetected(text);
     const beforeFilter = detected.length;
 
-    if (context.kind !== "auto" && validNumbers.length > 0) {
+    if (workingContext.kind !== "auto" && validNumbers.length > 0) {
       const valid = new Set(validNumbers);
       detected = detected.filter((n) => valid.has(n));
     }
@@ -259,6 +349,7 @@ export async function POST(req: Request) {
       contextDescription: describeContext(enrichedCtx),
       candidatesCount: validNumbers.length,
       usedReference: !!reference,
+      autoIdentified,
       raw: text,
       durationMs,
       usage: msg.usage,
@@ -470,4 +561,34 @@ function cleanNumbers(arr: unknown[]): number[] {
     if (Number.isFinite(n) && n >= 1 && n <= 980) out.add(Math.floor(n));
   }
   return Array.from(out).sort((a, b) => a - b);
+}
+
+function parseIdentify(
+  text: string,
+): { kind: string; teamCode?: string; teamSheet?: number; reason?: string } | null {
+  const tryParse = (raw: string) => {
+    try {
+      const j = JSON.parse(raw);
+      if (j && typeof j === "object") return j;
+    } catch {}
+    return null;
+  };
+  let parsed = tryParse(text);
+  if (!parsed) {
+    const m = text.match(/\{[\s\S]*"kind"[\s\S]*\}/);
+    if (m) parsed = tryParse(m[0]);
+  }
+  if (!parsed) return null;
+  const kind = String(parsed.kind ?? "").toLowerCase();
+  if (!["team", "coca_cola", "special", "unknown"].includes(kind)) return null;
+  return {
+    kind,
+    teamCode:
+      typeof parsed.teamCode === "string" ? parsed.teamCode.toUpperCase() : undefined,
+    teamSheet:
+      parsed.teamSheet === 1 || parsed.teamSheet === 2
+        ? parsed.teamSheet
+        : undefined,
+    reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
+  };
 }

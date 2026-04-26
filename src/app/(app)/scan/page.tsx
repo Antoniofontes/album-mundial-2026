@@ -41,6 +41,7 @@ type Job = {
   reqId?: string;
   raw?: string;
   usedReference?: boolean;
+  autoIdentified?: { kind: string; teamCode?: string; teamSheet?: number; reason?: string } | null;
 };
 
 export default function ScanPage() {
@@ -238,6 +239,12 @@ export default function ScanPage() {
             durationMs: number;
             raw: string;
             usedReference: boolean;
+            autoIdentified?: {
+              kind: string;
+              teamCode?: string;
+              teamSheet?: number;
+              reason?: string;
+            } | null;
           }
         | { error: string; reqId?: string };
 
@@ -265,6 +272,7 @@ export default function ScanPage() {
                 reqId: json.reqId,
                 raw: json.raw,
                 usedReference: json.usedReference,
+                autoIdentified: json.autoIdentified ?? null,
               }
             : j,
         ),
@@ -612,6 +620,17 @@ function JobCard({
                 {job.contextDescription}
                 {job.usedReference ? " · con referencia" : ""}
               </p>
+              {job.autoIdentified && (
+                <p className="text-[11px] text-[color:var(--primary)] truncate">
+                  IA detectó: {job.autoIdentified.kind}
+                  {job.autoIdentified.teamCode
+                    ? ` ${job.autoIdentified.teamCode}`
+                    : ""}
+                  {job.autoIdentified.teamSheet
+                    ? ` h${job.autoIdentified.teamSheet}`
+                    : ""}
+                </p>
+              )}
               {(job.detected?.length ?? 0) > 0 && (
                 <p className="text-[11px] mt-1 line-clamp-2">
                   {job.detected!
