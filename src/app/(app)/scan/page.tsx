@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useCollection } from "@/lib/store";
@@ -23,6 +23,7 @@ import {
   type ScanContext,
 } from "@/lib/album";
 import { TEAMS } from "@/lib/teams";
+import type { AlbumPage } from "@/lib/supabase/types";
 
 type JobStatus = "queued" | "uploading" | "scanning" | "done" | "error";
 
@@ -47,6 +48,8 @@ export default function ScanPage() {
   const [ctxKind, setCtxKind] = useState<ScanContext["kind"]>("team");
   const [teamCode, setTeamCode] = useState<string>("ARG");
   const [teamSheet, setTeamSheet] = useState<1 | 2>(1);
+  const [customId, setCustomId] = useState<string>("");
+  const [customPages, setCustomPages] = useState<AlbumPage[]>([]);
   const [showDebugFor, setShowDebugFor] = useState<string | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -54,13 +57,39 @@ export default function ScanPage() {
 
   const bulkAdd = useCollection((s) => s.bulkAdd);
 
-  const ctx: ScanContext = useMemo(
-    () =>
-      ctxKind === "team"
-        ? { kind: "team", teamCode, teamSheet }
-        : { kind: ctxKind },
-    [ctxKind, teamCode, teamSheet],
-  );
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("album_pages")
+        .select("*")
+        .eq("kind", "custom")
+        .order("created_at", { ascending: true })
+        .returns<AlbumPage[]>();
+      if (!mounted) return;
+      setCustomPages(data ?? []);
+      if ((data?.length ?? 0) > 0 && !customId) setCustomId(data![0].id);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [customId]);
+
+  const ctx: ScanContext = useMemo(() => {
+    if (ctxKind === "team") return { kind: "team", teamCode, teamSheet };
+    if (ctxKind === "custom") {
+      const page = customPages.find((p) => p.id === customId);
+      return {
+        kind: "custom",
+        customId,
+        customNumbers: page?.sticker_numbers ?? [],
+        customLabel: page?.custom_label ?? undefined,
+      };
+    }
+    return { kind: ctxKind };
+  }, [ctxKind, teamCode, teamSheet, customId, customPages]);
+
   const candidates = useMemo(() => stickersForContext(ctx), [ctx]);
 
   function addFiles(files: FileList | null) {
@@ -196,9 +225,7 @@ export default function ScanPage() {
         const rid = "reqId" in json && json.reqId ? ` (req ${json.reqId})` : "";
         setJobs((prev) =>
           prev.map((j) =>
-            j.id === jobId
-              ? { ...j, status: "error", error: msg + rid }
-              : j,
+            j.id === jobId ? { ...j, status: "error", error: msg + rid } : j,
           ),
         );
         return;
@@ -256,14 +283,6 @@ export default function ScanPage() {
     setJobs([]);
   }
 
-  function removeJob(id: string) {
-    setJobs((prev) => prev.filter((j) => j.id !== id));
-  }
-
-  function clearAll() {
-    setJobs([]);
-  }
-
   return (
     <div className="max-w-md mx-auto px-4 pt-6 pb-32">
       <header className="flex items-center justify-between gap-2">
@@ -279,7 +298,7 @@ export default function ScanPage() {
           <Link
             href="/scan/referencias"
             className="btn btn-secondary text-xs !px-2 !py-1"
-            title="Páginas de referencia (álbum vacío)"
+            title="Páginas de referencia"
           >
             <Library className="w-4 h-4" />
           </Link>
@@ -293,7 +312,6 @@ export default function ScanPage() {
         </div>
       </header>
 
-      {/* Selector de contexto */}
       <div className="card mt-4 !p-4">
         <h2 className="font-semibold text-sm mb-2">
           ¿Qué página estás escaneando?
@@ -306,12 +324,10 @@ export default function ScanPage() {
         <div className="grid grid-cols-2 gap-2 mb-3">
           {[
             { v: "team", label: "Selección" },
-            { v: "intro", label: "Intro / FIFA" },
-            { v: "stadium", label: "Estadios" },
             { v: "coca_cola", label: "Coca-Cola" },
-            { v: "legend", label: "Leyendas" },
-            { v: "special", label: "Brillantes" },
-            { v: "auto", label: "Auto-detectar" },
+            { v: "special", label: "Especiales" },
+            { v: "custom", label: "Hoja custom" },
+            { v: "auto", label: "Auto" },
           ].map((opt) => (
             <button
               key={opt.v}
@@ -352,13 +368,39 @@ export default function ScanPage() {
                   }`}
                 >
                   {sheet === 1
-                    ? "Hoja 1 (escudo + 1ª mitad)"
-                    : "Hoja 2 (2ª mitad)"}
+                    ? "Hoja 1 (escudo + foto + 9)"
+                    : "Hoja 2 (9 jugadores)"}
                 </button>
               ))}
             </div>
           </div>
         )}
+
+        {ctxKind === "custom" &&
+          (customPages.length === 0 ? (
+            <div className="text-xs text-[color:var(--muted)]">
+              Todavía no creaste hojas custom.{" "}
+              <Link
+                href="/scan/referencias"
+                className="text-[color:var(--primary)] underline"
+              >
+                Crear ahora
+              </Link>
+            </div>
+          ) : (
+            <select
+              value={customId}
+              onChange={(e) => setCustomId(e.target.value)}
+              className="w-full rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm"
+            >
+              {customPages.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.custom_label ?? "Hoja sin nombre"} ·{" "}
+                  {p.sticker_numbers.length} cromos
+                </option>
+              ))}
+            </select>
+          ))}
 
         <p className="text-[11px] text-[color:var(--muted)] mt-2">
           {describeContext(ctx)} · {candidates.length} figuritas posibles
@@ -368,7 +410,6 @@ export default function ScanPage() {
         </p>
       </div>
 
-      {/* Selector de fotos: cámara + galería, MULTIPLE */}
       <div className="card mt-3 !p-4">
         <p className="text-sm font-semibold mb-2">Agregar fotos</p>
         <div className="grid grid-cols-2 gap-2">
@@ -414,7 +455,6 @@ export default function ScanPage() {
         </p>
       </div>
 
-      {/* Cola */}
       {jobs.length > 0 && (
         <div className="mt-4">
           <div className="flex items-center justify-between gap-2 mb-2">
@@ -424,7 +464,7 @@ export default function ScanPage() {
             </p>
             <div className="flex gap-2">
               <button
-                onClick={clearAll}
+                onClick={() => setJobs([])}
                 disabled={running}
                 className="text-xs text-[color:var(--muted)] disabled:opacity-50"
               >
@@ -453,7 +493,9 @@ export default function ScanPage() {
               <JobCard
                 key={job.id}
                 job={job}
-                onRemove={() => removeJob(job.id)}
+                onRemove={() =>
+                  setJobs((prev) => prev.filter((j) => j.id !== job.id))
+                }
                 showDebug={showDebugFor === job.id}
                 onToggleDebug={() =>
                   setShowDebugFor((cur) => (cur === job.id ? null : job.id))

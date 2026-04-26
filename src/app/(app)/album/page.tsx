@@ -23,8 +23,12 @@ export default function AlbumPage() {
   const grouped = useMemo(() => teamsByGroup(), []);
 
   const extrasCount = useMemo(() => {
-    const extras = ALBUM.filter((s) => !s.team);
-    const ownedExtras = extras.filter((s) => (collection[s.number] ?? 0) > 0).length;
+    const extras = ALBUM.filter(
+      (s) => s.type === "coca_cola" || s.type === "special",
+    );
+    const ownedExtras = extras.filter(
+      (s) => (collection[s.number] ?? 0) > 0,
+    ).length;
     return { owned: ownedExtras, total: extras.length };
   }, [collection]);
 
@@ -66,7 +70,7 @@ export default function AlbumPage() {
       >
         <Sparkles className="w-5 h-5 text-[color:var(--gold)]" />
         <div className="flex-1">
-          <div className="font-semibold">Especiales / Intro / Estadios</div>
+          <div className="font-semibold">Coca-Cola y Especiales</div>
           <div className="text-xs text-[color:var(--muted)]">
             {extrasCount.owned}/{extrasCount.total} figuritas
           </div>

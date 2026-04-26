@@ -83,21 +83,41 @@ export async function POST(req: Request) {
 
     // 2) Imagen de referencia (álbum vacío) si existe para este contexto
     let reference: { b64: string; mediaType: SupportedMedia } | null = null;
+    let resolvedCustomNumbers: number[] | null = null;
+    let resolvedCustomLabel: string | null = null;
     if (context.kind !== "auto") {
-      let refQuery = supabase
-        .from("album_pages")
-        .select("*")
-        .eq("kind", context.kind);
-      if (context.kind === "team" && context.teamCode) {
-        refQuery = refQuery.eq("team_code", context.teamCode);
-        if (context.teamSheet) {
-          refQuery = refQuery.eq("team_sheet", context.teamSheet);
+      let refRow: AlbumPage | undefined;
+      if (context.kind === "custom") {
+        if (context.customId) {
+          const { data: refRows } = await supabase
+            .from("album_pages")
+            .select("*")
+            .eq("id", context.customId)
+            .limit(1)
+            .returns<AlbumPage[]>();
+          refRow = refRows?.[0];
+          if (refRow) {
+            resolvedCustomNumbers = refRow.sticker_numbers;
+            resolvedCustomLabel = refRow.custom_label;
+          }
         }
+      } else {
+        let refQuery = supabase
+          .from("album_pages")
+          .select("*")
+          .eq("kind", context.kind);
+        if (context.kind === "team" && context.teamCode) {
+          refQuery = refQuery.eq("team_code", context.teamCode);
+          if (context.teamSheet) {
+            refQuery = refQuery.eq("team_sheet", context.teamSheet);
+          }
+        }
+        const { data: refRows } = await refQuery
+          .limit(1)
+          .returns<AlbumPage[]>();
+        refRow = refRows?.[0];
       }
-      const { data: refRows } = await refQuery
-        .limit(1)
-        .returns<AlbumPage[]>();
-      const refRow = refRows?.[0];
+
       if (refRow) {
         const refImg = await downloadAsBase64(
           supabase,
@@ -109,6 +129,7 @@ export async function POST(req: Request) {
           log("using reference page", {
             id: refRow.id,
             sizeKb: refImg.sizeKb,
+            kind: refRow.kind,
           });
         } else {
           log("reference download failed", refImg.error);
@@ -119,16 +140,25 @@ export async function POST(req: Request) {
     }
 
     // Lista cerrada de figuritas válidas para esa página
-    const candidates = stickersForContext(context);
+    const enrichedCtx: ScanContext =
+      context.kind === "custom" && resolvedCustomNumbers
+        ? {
+            ...context,
+            customNumbers: resolvedCustomNumbers,
+            customLabel:
+              context.customLabel ?? resolvedCustomLabel ?? undefined,
+          }
+        : context;
+    const candidates = stickersForContext(enrichedCtx);
     const validNumbers = candidates.map((s) => s.number);
     log("context candidates", {
-      desc: describeContext(context),
+      desc: describeContext(enrichedCtx),
       count: validNumbers.length,
       hasReference: !!reference,
     });
 
     const { systemPrompt, userPrompt } = buildPrompt(
-      context,
+      enrichedCtx,
       candidates,
       !!reference,
     );
@@ -223,8 +253,8 @@ export async function POST(req: Request) {
     return NextResponse.json({
       reqId,
       detected,
-      context,
-      contextDescription: describeContext(context),
+      context: enrichedCtx,
+      contextDescription: describeContext(enrichedCtx),
       candidatesCount: validNumbers.length,
       usedReference: !!reference,
       raw: text,

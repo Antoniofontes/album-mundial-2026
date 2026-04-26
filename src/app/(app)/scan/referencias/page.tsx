@@ -12,8 +12,9 @@ import {
   Plus,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
-import { stickersForContext, describeContext } from "@/lib/album";
+import { ALBUM, stickersForContext, describeContext } from "@/lib/album";
 import type { AlbumPage, AlbumPageKind } from "@/lib/supabase/types";
 
 type Slot = {
@@ -21,6 +22,7 @@ type Slot = {
   kind: AlbumPageKind;
   teamCode?: string;
   teamSheet?: 1 | 2;
+  customLabel?: string;
   label: string;
   stickerNumbers: number[];
   existing?: AlbumPage;
@@ -32,19 +34,12 @@ export default function ReferenciasPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingSlot, setPendingSlot] = useState<Slot | null>(null);
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const slots: Slot[] = useMemo(() => {
+  const presetSlots: Slot[] = useMemo(() => {
     const out: Slot[] = [];
-    out.push({
-      id: "intro",
-      kind: "intro",
-      label: "Intro / FIFA / Mascotas",
-      stickerNumbers: stickersForContext({ kind: "intro" }).map(
-        (s) => s.number,
-      ),
-    });
     for (const t of TEAMS) {
       for (const sheet of [1, 2] as const) {
         out.push({
@@ -62,33 +57,17 @@ export default function ReferenciasPage() {
       }
     }
     out.push({
-      id: "stadium",
-      kind: "stadium",
-      label: "Estadios / Sedes 2026",
-      stickerNumbers: stickersForContext({ kind: "stadium" }).map(
-        (s) => s.number,
-      ),
-    });
-    out.push({
       id: "coca_cola",
       kind: "coca_cola",
-      label: "Especiales Coca-Cola",
+      label: "Coca-Cola (12 cromos)",
       stickerNumbers: stickersForContext({ kind: "coca_cola" }).map(
-        (s) => s.number,
-      ),
-    });
-    out.push({
-      id: "legend",
-      kind: "legend",
-      label: "Leyendas del Mundial",
-      stickerNumbers: stickersForContext({ kind: "legend" }).map(
         (s) => s.number,
       ),
     });
     out.push({
       id: "special",
       kind: "special",
-      label: "Brillantes / Foil finales",
+      label: "Especiales / Portada (8 cromos)",
       stickerNumbers: stickersForContext({ kind: "special" }).map(
         (s) => s.number,
       ),
@@ -128,8 +107,8 @@ export default function ReferenciasPage() {
     };
   }, []);
 
-  const slotsWithExisting: Slot[] = useMemo(() => {
-    return slots.map((slot) => {
+  const presetSlotsWithExisting: Slot[] = useMemo(() => {
+    return presetSlots.map((slot) => {
       const existing = pages.find(
         (p) =>
           p.kind === slot.kind &&
@@ -138,10 +117,15 @@ export default function ReferenciasPage() {
       );
       return { ...slot, existing };
     });
-  }, [slots, pages]);
+  }, [presetSlots, pages]);
 
-  const totalSlots = slotsWithExisting.length;
-  const filledSlots = slotsWithExisting.filter((s) => s.existing).length;
+  const customPages = useMemo(
+    () => pages.filter((p) => p.kind === "custom"),
+    [pages],
+  );
+
+  const totalSlots = presetSlotsWithExisting.length;
+  const filledSlots = presetSlotsWithExisting.filter((s) => s.existing).length;
 
   function chooseFile(slot: Slot) {
     setPendingSlot(slot);
@@ -170,7 +154,6 @@ export default function ReferenciasPage() {
       const sheetSuffix = slot.teamSheet ? `-h${slot.teamSheet}` : "";
       const path = `${slot.kind}-${slot.teamCode ?? "all"}${sheetSuffix}-${Date.now()}.${ext}`;
 
-      // Si ya existe, eliminamos la foto vieja del storage primero
       if (slot.existing) {
         await supabase.storage
           .from("album-pages")
@@ -209,6 +192,7 @@ export default function ReferenciasPage() {
           kind: slot.kind,
           team_code: slot.teamCode ?? null,
           team_sheet: slot.teamSheet ?? null,
+          custom_label: slot.customLabel ?? null,
           storage_path: path,
           sticker_numbers: slot.stickerNumbers,
           uploaded_by: user.id,
@@ -220,19 +204,14 @@ export default function ReferenciasPage() {
         }
       }
 
-      // Refrescar
       const { data } = await supabase
         .from("album_pages")
         .select("*")
         .order("created_at", { ascending: false })
         .returns<AlbumPage[]>();
       setPages(data ?? []);
-      const newRow = (data ?? []).find(
-        (p) =>
-          p.kind === slot.kind &&
-          (p.team_code ?? null) === (slot.teamCode ?? null) &&
-          (p.team_sheet ?? null) === (slot.teamSheet ?? null),
-      );
+
+      const newRow = (data ?? []).find((p) => p.storage_path === path);
       if (newRow) {
         const { data: s } = await supabase.storage
           .from("album-pages")
@@ -246,17 +225,19 @@ export default function ReferenciasPage() {
     }
   }
 
-  async function deleteSlot(slot: Slot) {
-    if (!slot.existing) return;
-    if (!confirm(`Borrar la referencia de "${slot.label}"?`)) return;
-    setBusy(slot.id);
+  async function deletePage(p: AlbumPage) {
+    if (
+      !confirm(
+        `Borrar referencia "${p.custom_label ?? p.team_code ?? p.kind}"?`,
+      )
+    )
+      return;
+    setBusy(p.id);
     try {
       const supabase = createClient();
-      await supabase.storage
-        .from("album-pages")
-        .remove([slot.existing.storage_path]);
-      await supabase.from("album_pages").delete().eq("id", slot.existing.id);
-      setPages((prev) => prev.filter((p) => p.id !== slot.existing!.id));
+      await supabase.storage.from("album-pages").remove([p.storage_path]);
+      await supabase.from("album_pages").delete().eq("id", p.id);
+      setPages((prev) => prev.filter((x) => x.id !== p.id));
     } finally {
       setBusy(null);
     }
@@ -296,7 +277,8 @@ export default function ReferenciasPage() {
 
       <div className="card mt-4 !p-4">
         <p className="text-sm">
-          <b>{filledSlots}</b> de {totalSlots} páginas con referencia subida.
+          <b>{filledSlots}</b> de {totalSlots} hojas con referencia.{" "}
+          <b>{customPages.length}</b> hojas custom creadas.
         </p>
         <div className="h-2 bg-[color:var(--card-border)] rounded-full mt-2 overflow-hidden">
           <div
@@ -305,7 +287,6 @@ export default function ReferenciasPage() {
           />
         </div>
         <p className="text-[11px] text-[color:var(--muted)] mt-2">
-          Subí al menos las páginas de las selecciones que vas a escanear más.
           Mientras más subas, más preciso es el reconocimiento.
         </p>
       </div>
@@ -322,81 +303,390 @@ export default function ReferenciasPage() {
         </div>
       )}
 
-      <ul className="mt-4 space-y-2">
-        {slotsWithExisting.map((slot) => {
-          const url = slot.existing
-            ? signedUrls[slot.existing.id]
-            : undefined;
-          const isBusy = busy === slot.id;
-          const ctxLabel = describeContext(
-            slot.kind === "team"
-              ? {
-                  kind: "team",
-                  teamCode: slot.teamCode,
-                  teamSheet: slot.teamSheet,
-                }
-              : { kind: slot.kind },
-          );
-          return (
-            <li
-              key={slot.id}
-              className="card !p-3 flex items-center gap-3"
-              title={ctxLabel}
-            >
-              <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-[color:var(--card-border)] flex items-center justify-center">
-                {url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={url}
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
-                ) : slot.existing ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-[color:var(--muted)]" />
-                ) : (
-                  <Plus className="w-5 h-5 text-[color:var(--muted)]" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate">{slot.label}</p>
-                <p className="text-[11px] text-[color:var(--muted)] truncate">
-                  {slot.stickerNumbers.length} figuritas · #
-                  {slot.stickerNumbers[0]}–#
-                  {slot.stickerNumbers[slot.stickerNumbers.length - 1]}
-                </p>
-                {slot.existing && (
-                  <p className="text-[10px] text-emerald-400 flex items-center gap-1 mt-0.5">
-                    <CheckCircle2 className="w-3 h-3" /> referencia cargada
-                  </p>
-                )}
-              </div>
-              <div className="flex flex-col gap-1 shrink-0">
-                <button
-                  disabled={isBusy}
-                  onClick={() => chooseFile(slot)}
-                  className="btn btn-primary text-[10px] !px-2 !py-1 disabled:opacity-50"
-                >
-                  {isBusy ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
+      {/* Custom pages */}
+      <section className="mt-6">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-bold">Hojas custom</h2>
+          <button
+            onClick={() => setShowCustomForm(true)}
+            className="btn btn-primary text-xs !px-3 !py-1.5"
+          >
+            <Plus className="w-3 h-3" /> Nueva
+          </button>
+        </div>
+        <p className="text-[11px] text-[color:var(--muted)] mb-3">
+          Para hojas no estándar (portada, mascotas, copa, países sede,
+          campeones del mundo, etc.). Vos definís qué cromos van.
+        </p>
+
+        {customPages.length === 0 && (
+          <div className="text-center text-xs text-[color:var(--muted)] py-4">
+            Todavía no creaste ninguna hoja custom.
+          </div>
+        )}
+
+        <ul className="space-y-2">
+          {customPages.map((p) => {
+            const url = signedUrls[p.id];
+            return (
+              <li key={p.id} className="card !p-3 flex items-center gap-3">
+                <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-[color:var(--card-border)] flex items-center justify-center">
+                  {url ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={url}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
                   ) : (
-                    <Upload className="w-3 h-3" />
+                    <Loader2 className="w-4 h-4 animate-spin text-[color:var(--muted)]" />
                   )}
-                  {slot.existing ? "Cambiar" : "Subir"}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate">
+                    {p.custom_label ?? "Hoja sin nombre"}
+                  </p>
+                  <p className="text-[11px] text-[color:var(--muted)] truncate">
+                    {p.sticker_numbers.length} cromos:{" "}
+                    {p.sticker_numbers.slice(0, 8).join(", ")}
+                    {p.sticker_numbers.length > 8 ? "..." : ""}
+                  </p>
+                </div>
+                <button
+                  onClick={() => deletePage(p)}
+                  disabled={busy === p.id}
+                  className="text-[color:var(--accent)]"
+                >
+                  {busy === p.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
                 </button>
-                {slot.existing && (
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {/* Preset slots */}
+      <section className="mt-6">
+        <h2 className="text-sm font-bold mb-2">Hojas estándar</h2>
+        <p className="text-[11px] text-[color:var(--muted)] mb-3">
+          96 hojas de equipos (2 por país) + 2 secciones especiales.
+        </p>
+        <ul className="space-y-2">
+          {presetSlotsWithExisting.map((slot) => {
+            const url = slot.existing
+              ? signedUrls[slot.existing.id]
+              : undefined;
+            const isBusy = busy === slot.id;
+            const ctxLabel = describeContext(
+              slot.kind === "team"
+                ? {
+                    kind: "team",
+                    teamCode: slot.teamCode,
+                    teamSheet: slot.teamSheet,
+                  }
+                : { kind: slot.kind },
+            );
+            return (
+              <li
+                key={slot.id}
+                className="card !p-3 flex items-center gap-3"
+                title={ctxLabel}
+              >
+                <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-[color:var(--card-border)] flex items-center justify-center">
+                  {url ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={url}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  ) : slot.existing ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-[color:var(--muted)]" />
+                  ) : (
+                    <Plus className="w-5 h-5 text-[color:var(--muted)]" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate">
+                    {slot.label}
+                  </p>
+                  <p className="text-[11px] text-[color:var(--muted)] truncate">
+                    {slot.stickerNumbers.length} cromos · #
+                    {slot.stickerNumbers[0]}–#
+                    {slot.stickerNumbers[slot.stickerNumbers.length - 1]}
+                  </p>
+                  {slot.existing && (
+                    <p className="text-[10px] text-emerald-400 flex items-center gap-1 mt-0.5">
+                      <CheckCircle2 className="w-3 h-3" /> referencia cargada
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1 shrink-0">
                   <button
                     disabled={isBusy}
-                    onClick={() => deleteSlot(slot)}
-                    className="text-[10px] text-[color:var(--muted)] flex items-center gap-1 justify-center"
+                    onClick={() => chooseFile(slot)}
+                    className="btn btn-primary text-[10px] !px-2 !py-1 disabled:opacity-50"
                   >
-                    <Trash2 className="w-3 h-3" /> borrar
+                    {isBusy ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Upload className="w-3 h-3" />
+                    )}
+                    {slot.existing ? "Cambiar" : "Subir"}
                   </button>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                  {slot.existing && (
+                    <button
+                      disabled={isBusy}
+                      onClick={() => deletePage(slot.existing!)}
+                      className="text-[10px] text-[color:var(--muted)] flex items-center gap-1 justify-center"
+                    >
+                      <Trash2 className="w-3 h-3" /> borrar
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {showCustomForm && (
+        <CustomPageModal
+          onClose={() => setShowCustomForm(false)}
+          onSaved={(p) => {
+            setShowCustomForm(false);
+            setPages((prev) => [p, ...prev]);
+            (async () => {
+              const supabase = createClient();
+              const { data: s } = await supabase.storage
+                .from("album-pages")
+                .createSignedUrl(p.storage_path, 60 * 60);
+              if (s?.signedUrl) {
+                setSignedUrls((prev) => ({ ...prev, [p.id]: s.signedUrl }));
+              }
+            })();
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function CustomPageModal({
+  onClose,
+  onSaved,
+}: {
+  onClose: () => void;
+  onSaved: (p: AlbumPage) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [numbersText, setNumbersText] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const parsedNumbers = useMemo(() => parseRanges(numbersText), [numbersText]);
+
+  function handleFile(f: File) {
+    setFile(f);
+    const r = new FileReader();
+    r.onload = (e) => setFilePreview(e.target?.result as string);
+    r.readAsDataURL(f);
+  }
+
+  async function handleSubmit() {
+    setErr(null);
+    if (!label.trim()) {
+      setErr("Poné un nombre.");
+      return;
+    }
+    if (parsedNumbers.length === 0) {
+      setErr(
+        "Tenés que poner al menos un número. Ej: 1, 2, 3 o 1-5 o 1, 5-10",
+      );
+      return;
+    }
+    if (!file) {
+      setErr("Subí una foto del álbum vacío de esta hoja.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setErr("No estás logueado.");
+        return;
+      }
+
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `custom-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("album-pages")
+        .upload(path, file, {
+          contentType: file.type || "image/jpeg",
+          upsert: false,
+        });
+      if (upErr) {
+        setErr("Subida: " + upErr.message);
+        return;
+      }
+
+      const { data: row, error: insErr } = await supabase
+        .from("album_pages")
+        .insert({
+          kind: "custom",
+          custom_label: label.trim(),
+          sticker_numbers: parsedNumbers,
+          storage_path: path,
+          uploaded_by: user.id,
+        })
+        .select()
+        .single<AlbumPage>();
+      if (insErr || !row) {
+        setErr("DB: " + (insErr?.message ?? "no row"));
+        return;
+      }
+
+      onSaved(row);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-3">
+      <div className="card w-full max-w-md max-h-[90vh] overflow-y-auto !p-0">
+        <div className="flex items-center justify-between p-4 border-b border-[color:var(--card-border)] sticky top-0 bg-[color:var(--card-bg)] z-10">
+          <h3 className="font-bold">Nueva hoja custom</h3>
+          <button onClick={onClose} className="text-[color:var(--muted)]">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-3">
+          <div>
+            <label className="text-xs font-semibold">Nombre</label>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Ej: Portada / 00, Copa y pelota, Países sede"
+              className="w-full mt-1 rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold">
+              Números de figuritas en esta hoja
+            </label>
+            <input
+              value={numbersText}
+              onChange={(e) => setNumbersText(e.target.value)}
+              placeholder="Ej: 973, 974, 975 ó 973-980 ó 1, 5-10"
+              className="w-full mt-1 rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm font-mono"
+            />
+            <p className="text-[11px] text-[color:var(--muted)] mt-1">
+              Detectados: {parsedNumbers.length} números (
+              {parsedNumbers.slice(0, 12).join(", ")}
+              {parsedNumbers.length > 12 ? "..." : ""})
+            </p>
+            <p className="text-[10px] text-[color:var(--muted)]">
+              Cromos especiales válidos: 973–980 (los 8 misceláneos del álbum).
+              Si tu álbum tiene la disposición distinta, usá los números reales.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold">
+              Foto del álbum vacío
+            </label>
+            <label className="btn btn-secondary mt-1 w-full cursor-pointer">
+              <Upload className="w-4 h-4" />
+              {file ? "Cambiar foto" : "Elegir foto"}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleFile(f);
+                }}
+              />
+            </label>
+            {filePreview && (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={filePreview}
+                alt=""
+                className="mt-2 rounded-lg max-h-40 mx-auto"
+              />
+            )}
+          </div>
+
+          {err && (
+            <p className="text-sm text-[color:var(--accent)] break-words">
+              {err}
+            </p>
+          )}
+
+          <div className="grid grid-cols-2 gap-2 pt-2">
+            <button
+              onClick={onClose}
+              disabled={submitting}
+              className="btn btn-secondary"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="btn btn-primary disabled:opacity-50"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" /> Guardando
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" /> Guardar
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Parsea "1, 5-10, 12" => [1, 5, 6, 7, 8, 9, 10, 12] */
+function parseRanges(text: string): number[] {
+  const set = new Set<number>();
+  const parts = text.split(/[,\s]+/).filter(Boolean);
+  for (const p of parts) {
+    const m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (Number.isFinite(a) && Number.isFinite(b)) {
+        const lo = Math.min(a, b);
+        const hi = Math.max(a, b);
+        for (let i = lo; i <= hi; i++) {
+          if (i >= 1 && i <= 980 && ALBUM[i - 1]) set.add(i);
+        }
+      }
+    } else {
+      const n = Number(p);
+      if (Number.isFinite(n) && n >= 1 && n <= 980) set.add(n);
+    }
+  }
+  return Array.from(set).sort((a, b) => a - b);
 }

@@ -45,20 +45,15 @@ export type Scan = {
   created_at: string;
 };
 
-export type AlbumPageKind =
-  | "team"
-  | "intro"
-  | "stadium"
-  | "coca_cola"
-  | "legend"
-  | "special";
+export type AlbumPageKind = "team" | "coca_cola" | "special" | "custom";
 
 export type AlbumPage = {
   id: string;
   uploaded_by: string | null;
   kind: AlbumPageKind;
   team_code: string | null;
-  team_sheet: number | null; // 1 o 2 cuando es equipo
+  team_sheet: number | null;
+  custom_label: string | null;
   storage_path: string;
   sticker_numbers: number[];
   notes: string | null;
