@@ -5,6 +5,9 @@ import { createClient } from "@/lib/supabase/client";
 import type { UserStats } from "@/lib/supabase/types";
 import { Trophy, Medal } from "lucide-react";
 import Link from "next/link";
+import { ALBUM } from "@/lib/album";
+
+const TOTAL = ALBUM.length;
 
 export default function LeaderboardPage() {
   const [users, setUsers] = useState<UserStats[]>([]);
@@ -55,7 +58,7 @@ export default function LeaderboardPage() {
 }
 
 function Row({ user, rank }: { user: UserStats; rank: number }) {
-  const pct = Math.round((user.owned / 980) * 100);
+  const pct = Math.round((user.owned / TOTAL) * 100);
   const medalColor =
     rank === 1
       ? "text-[color:var(--gold)]"
@@ -84,7 +87,7 @@ function Row({ user, rank }: { user: UserStats; rank: number }) {
       </div>
       <div className="text-right">
         <div className="font-black text-lg">{user.owned}</div>
-        <div className="text-[10px] text-[color:var(--muted)] -mt-0.5">/{980}</div>
+        <div className="text-[10px] text-[color:var(--muted)] -mt-0.5">/{TOTAL}</div>
       </div>
     </Link>
   );

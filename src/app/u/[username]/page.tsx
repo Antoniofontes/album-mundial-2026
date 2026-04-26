@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import { ALBUM, stickersOfTeam } from "@/lib/album";
-import { TEAMS, GROUPS, teamsByGroup } from "@/lib/teams";
+import { GROUPS, teamsByGroup } from "@/lib/teams";
 import Link from "next/link";
 import { ArrowLeft, BookOpen, Trophy } from "lucide-react";
 import { GuestStickers } from "./GuestStickers";
@@ -30,20 +30,21 @@ export default async function PublicProfile({ params }: Props) {
 
   const { data: collection } = await supabase
     .from("collection")
-    .select("sticker_number, count")
+    .select("sticker_code, count")
     .eq("user_id", profile.id);
 
-  const map = new Map<number, number>();
-  for (const r of collection ?? []) map.set(r.sticker_number, r.count);
+  const map = new Map<string, number>();
+  for (const r of collection ?? []) map.set(r.sticker_code, r.count);
 
   const owned = Array.from(map.values()).filter((c) => c > 0).length;
   const dups = Array.from(map.values()).reduce(
     (a, c) => a + Math.max(0, c - 1),
     0,
   );
+  const total = ALBUM.length;
 
   const grouped = teamsByGroup();
-  const collectionObj: Record<number, number> = {};
+  const collectionObj: Record<string, number> = {};
   map.forEach((v, k) => (collectionObj[k] = v));
 
   return (
@@ -80,7 +81,7 @@ export default async function PublicProfile({ params }: Props) {
             </div>
           </div>
           <div>
-            <div className="text-2xl font-black">{980 - owned}</div>
+            <div className="text-2xl font-black">{total - owned}</div>
             <div className="text-[10px] uppercase text-[color:var(--muted)]">
               Faltan
             </div>
@@ -117,7 +118,7 @@ export default async function PublicProfile({ params }: Props) {
             <div className="grid grid-cols-2 gap-2">
               {grouped[g].map((team) => {
                 const ts = stickersOfTeam(team.code);
-                const o = ts.filter((s) => (map.get(s.number) ?? 0) > 0).length;
+                const o = ts.filter((s) => (map.get(s.code) ?? 0) > 0).length;
                 const pct = Math.round((o / ts.length) * 100);
                 return (
                   <div key={team.code} className="card !p-3 flex items-center gap-2">

@@ -16,7 +16,7 @@ export default function ListaPage() {
 
   const filtered = useMemo(() => {
     return ALBUM.filter((s) => {
-      const c = collection[s.number] ?? 0;
+      const c = collection[s.code] ?? 0;
       if (filter === "owned" && c === 0) return false;
       if (filter === "missing" && c > 0) return false;
       if (filter === "dups" && c < 2) return false;
@@ -24,7 +24,7 @@ export default function ListaPage() {
         const ql = q.toLowerCase();
         if (
           !s.name.toLowerCase().includes(ql) &&
-          !String(s.number).includes(ql) &&
+          !s.code.toLowerCase().includes(ql) &&
           !(s.team ?? "").toLowerCase().includes(ql)
         )
           return false;
@@ -39,14 +39,14 @@ export default function ListaPage() {
         <button onClick={() => router.back()} className="btn btn-ghost !px-2">
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <h1 className="font-black text-xl">Las 980</h1>
+        <h1 className="font-black text-xl">Las 994</h1>
       </div>
 
       <div className="mt-4 relative">
         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)]" />
         <input
           type="search"
-          placeholder="Buscar número, nombre o ARG..."
+          placeholder="Buscar código (ARG12, FWC3, CC7) o nombre..."
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="!pl-10"
@@ -81,10 +81,10 @@ export default function ListaPage() {
       <div className="grid grid-cols-3 gap-2 mt-3">
         {filtered.map((s) => (
           <StickerCell
-            key={s.number}
+            key={s.code}
             sticker={s}
-            count={collection[s.number] ?? 0}
-            onChange={(c) => setCount(s.number, c)}
+            count={collection[s.code] ?? 0}
+            onChange={(c) => setCount(s.code, c)}
           />
         ))}
       </div>

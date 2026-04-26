@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { ALBUM_BY_NUMBER } from "@/lib/album";
+import { ALBUM_BY_CODE } from "@/lib/album";
 import { ArrowLeft, Camera, Image as ImageIcon } from "lucide-react";
 import type { Scan } from "@/lib/supabase/types";
 
@@ -69,7 +69,7 @@ export default async function HistorialPage() {
 
       <ul className="mt-4 space-y-3">
         {withUrl.map(({ scan, url }) => {
-          const numbers = scan.detected_numbers ?? [];
+          const codes = scan.detected_codes ?? [];
           const date = new Date(scan.created_at).toLocaleString("es-AR", {
             dateStyle: "short",
             timeStyle: "short",
@@ -97,20 +97,20 @@ export default async function HistorialPage() {
                     <StatusBadge status={scan.status} />
                   </div>
                   <p className="font-bold mt-1">
-                    {numbers.length === 0
+                    {codes.length === 0
                       ? "Sin detecciones"
-                      : `${numbers.length} figurita${numbers.length === 1 ? "" : "s"}`}
+                      : `${codes.length} figurita${codes.length === 1 ? "" : "s"}`}
                   </p>
-                  {numbers.length > 0 && (
+                  {codes.length > 0 && (
                     <p className="text-[11px] text-[color:var(--muted)] mt-1 line-clamp-2">
-                      {numbers
+                      {codes
                         .slice(0, 8)
                         .map(
-                          (n) =>
-                            `#${n} ${ALBUM_BY_NUMBER[n]?.name ?? ""}`.trim(),
+                          (c) =>
+                            `${c} ${ALBUM_BY_CODE[c]?.name ?? ""}`.trim(),
                         )
                         .join(" · ")}
-                      {numbers.length > 8 ? ` · +${numbers.length - 8}` : ""}
+                      {codes.length > 8 ? ` · +${codes.length - 8}` : ""}
                     </p>
                   )}
                   {scan.error && (

@@ -10,14 +10,19 @@ import { useMemo } from "react";
 
 const SECTIONS: { key: StickerType; title: string; subtitle: string }[] = [
   {
-    key: "coca_cola",
-    title: "Edición Coca-Cola",
-    subtitle: "12 figuritas (vienen en botellas)",
+    key: "intro",
+    title: "Portada (00)",
+    subtitle: "1 sticker",
   },
   {
-    key: "special",
-    title: "Especiales / Portada",
-    subtitle: "8 figuritas misceláneas (intro, copa, mascotas, etc.)",
+    key: "fwc",
+    title: "FIFA World Cup specials",
+    subtitle: "FWC1 a FWC19 — mascotas, copa, sedes, campeones, etc.",
+  },
+  {
+    key: "coca_cola",
+    title: "Edición Coca-Cola",
+    subtitle: "CC1 a CC14 — vienen en botellas",
   },
 ];
 
@@ -44,9 +49,8 @@ export default function ExtrasPage() {
       </div>
 
       <p className="text-xs text-[color:var(--muted)] mt-2">
-        Las hojas físicas como portada, mascotas, copa, sedes y campeones del
-        mundo varían entre versiones del álbum. Podés organizarlas vos mismo
-        creando hojas custom desde el escáner.
+        Acá van todas las figuritas que no son de selecciones: portada (00),
+        FIFA World Cup specials (FWC1–FWC19) y la línea Coca-Cola (CC1–CC14).
       </p>
 
       <Link
@@ -57,14 +61,16 @@ export default function ExtrasPage() {
         <div className="flex-1">
           <div className="font-semibold">Crear hojas custom</div>
           <div className="text-xs text-[color:var(--muted)]">
-            Subí foto + ponele nombre + elegí qué números van
+            Subí foto + ponele nombre + elegí qué códigos van
           </div>
         </div>
       </Link>
 
       {SECTIONS.map((sec) => {
         const list = groups[sec.key];
-        const owned = list.filter((s) => (collection[s.number] ?? 0) > 0).length;
+        const owned = list.filter(
+          (s) => (collection[s.code] ?? 0) > 0,
+        ).length;
         return (
           <section key={sec.key} className="mt-6">
             <div className="flex justify-between items-end mb-1">
@@ -79,10 +85,10 @@ export default function ExtrasPage() {
             <div className="grid grid-cols-3 gap-2">
               {list.map((s) => (
                 <StickerCell
-                  key={s.number}
+                  key={s.code}
                   sticker={s}
-                  count={collection[s.number] ?? 0}
-                  onChange={(c) => setCount(s.number, c)}
+                  count={collection[s.code] ?? 0}
+                  onChange={(c) => setCount(s.code, c)}
                 />
               ))}
             </div>

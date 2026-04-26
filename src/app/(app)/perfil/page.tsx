@@ -21,11 +21,12 @@ export default function PerfilPage() {
   const [siteUrl, setSiteUrl] = useState("");
 
   const collection = useCollection((s) => s.collection);
-  const owned = ALBUM.filter((s) => (collection[s.number] ?? 0) > 0).length;
+  const owned = ALBUM.filter((s) => (collection[s.code] ?? 0) > 0).length;
   const dups = ALBUM.reduce(
-    (a, s) => a + Math.max(0, (collection[s.number] ?? 0) - 1),
+    (a, s) => a + Math.max(0, (collection[s.code] ?? 0) - 1),
     0,
   );
+  const total = ALBUM.length;
 
   useEffect(() => {
     setSiteUrl(window.location.origin);
@@ -81,7 +82,7 @@ export default function PerfilPage() {
       try {
         await navigator.share({
           title: `${name} — Álbum Mundial 2026`,
-          text: `Mirá mi álbum del Mundial 2026: ${owned}/980 figuritas`,
+          text: `Mirá mi álbum del Mundial 2026: ${owned}/${total} figuritas`,
           url,
         });
       } catch {}
@@ -123,7 +124,7 @@ export default function PerfilPage() {
           <div className="text-[10px] uppercase text-[color:var(--muted)]">Repetidas</div>
         </div>
         <div>
-          <div className="text-2xl font-black">{980 - owned}</div>
+          <div className="text-2xl font-black">{total - owned}</div>
           <div className="text-[10px] uppercase text-[color:var(--muted)]">Faltan</div>
         </div>
       </div>

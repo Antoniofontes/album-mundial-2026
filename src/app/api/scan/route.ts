@@ -4,7 +4,11 @@ import sharp from "sharp";
 import { createClient } from "@/lib/supabase/server";
 import {
   stickersForContext,
+  stickersOfTeam,
+  splitTeamSheet,
   describeContext,
+  parseStickerCode,
+  isValidCode,
   type ScanContext,
   type Sticker,
 } from "@/lib/album";
@@ -14,7 +18,6 @@ import type { AlbumPage } from "@/lib/supabase/types";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Claude permite hasta 5MB en base64. Apuntamos a ~3.5MB con margen de seguridad.
 const TARGET_BASE64_BYTES = 3.5 * 1024 * 1024;
 const MAX_SIDE_PX = 1568;
 
@@ -57,7 +60,6 @@ export async function POST(req: Request) {
     }
     log("user", user.id);
 
-    // 1) Imagen del usuario (descarga + compresión para Claude)
     const userImage = await downloadAndCompress(
       supabase,
       "album-scans",
@@ -85,9 +87,13 @@ export async function POST(req: Request) {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const model = "claude-sonnet-4-5";
 
-    // 1.5) Si el contexto es "auto", primero identificamos la página.
     let workingContext: ScanContext = context;
-    let autoIdentified: { kind: string; teamCode?: string; teamSheet?: number; raw?: string } | null = null;
+    let autoIdentified: {
+      kind: string;
+      teamCode?: string;
+      teamSheet?: number;
+      raw?: string;
+    } | null = null;
     if (context.kind === "auto") {
       log("auto-identify: calling Claude to detect page kind");
       const idStarted = Date.now();
@@ -97,22 +103,25 @@ export async function POST(req: Request) {
           max_tokens: 200,
           system: `Identificás qué página del álbum Panini "FIFA World Cup 2026" muestra una foto.
 
-El álbum tiene 980 figuritas:
-- 48 selecciones × 20 figuritas. Cada selección ocupa 2 hojas:
-  - HOJA 1: escudo de la selección + foto grupal del equipo + 9 jugadores (11 cromos)
-  - HOJA 2: 9 jugadores (9 cromos)
-- 12 cromos exclusivos de Coca-Cola (961-972)
-- 8 cromos especiales / portada / mascotas / etc. (973-980)
+El álbum tiene 994 stickers identificados por CÓDIGO impreso (no por número global):
+- 48 selecciones × 20 stickers = 960. Cada sticker tiene código <CODE>1..<CODE>20 donde CODE es el código del país.
+  Cada selección ocupa 2 hojas:
+   · HOJA 1 = <CODE>1..<CODE>10 → escudo (<CODE>1) + 9 jugadores.
+   · HOJA 2 = <CODE>11..<CODE>20 → 9 jugadores + foto grupal (<CODE>13).
+- Coca-Cola: códigos CC1..CC14 (14 stickers).
+- FIFA World Cup specials: códigos FWC1..FWC19 (19 stickers, mascotas/pelota/copa/sedes/etc.).
+- Portada: código "00" (1 sticker).
 
-Códigos de selección posibles: ${TEAMS.map((t) => `${t.code}=${t.name}`).join(", ")}.
+Códigos de selección: ${TEAMS.map((t) => `${t.code}=${t.name}`).join(", ")}.
 
-Devolvés SOLO un JSON: { "kind": "team"|"coca_cola"|"special"|"unknown", "teamCode": "<codigo>"|null, "teamSheet": 1|2|null, "reason": "<breve>" }.
+Devolvés SOLO un JSON: { "kind": "team"|"coca_cola"|"fwc"|"intro"|"unknown", "teamCode": "<codigo>"|null, "teamSheet": 1|2|null, "reason": "<breve>" }.
 
 Reglas:
-- Si ves un escudo grande de selección + foto grupal: kind="team", teamSheet=1.
-- Si ves solo jugadores en cuadrícula sin escudo grande: kind="team", teamSheet=2 (y el teamCode lo deducís por las caras/colores/letras del badge en cada cromo).
+- Si ves un escudo grande de selección y jugadores: kind="team", teamSheet=1.
+- Si ves una foto grupal del equipo y jugadores sin escudo grande: kind="team", teamSheet=2.
 - Si ves logos de Coca-Cola o cromos con marco rojo Coca-Cola: kind="coca_cola".
-- Si ves la portada del álbum, mascotas, copa/pelota, países sede, campeones del mundo: kind="special" (o "unknown" si no estás seguro).
+- Si ves la portada principal del álbum: kind="intro".
+- Si ves mascotas, copa/pelota, países sede, campeones, gráficos FIFA: kind="fwc".
 - Sin markdown, sin texto fuera del JSON.`,
           messages: [
             {
@@ -148,8 +157,8 @@ Reglas:
         if (parsed) {
           autoIdentified = { ...parsed, raw: idText };
           if (parsed.kind === "team" && parsed.teamCode) {
-            const validCode = TEAMS.find((t) => t.code === parsed.teamCode);
-            if (validCode) {
+            const valid = TEAMS.find((t) => t.code === parsed.teamCode);
+            if (valid) {
               workingContext = {
                 kind: "team",
                 teamCode: parsed.teamCode,
@@ -159,10 +168,10 @@ Reglas:
             }
           } else if (parsed.kind === "coca_cola") {
             workingContext = { kind: "coca_cola" };
-            log("auto-identify -> coca_cola");
-          } else if (parsed.kind === "special") {
-            workingContext = { kind: "special" };
-            log("auto-identify -> special");
+          } else if (parsed.kind === "fwc") {
+            workingContext = { kind: "fwc" };
+          } else if (parsed.kind === "intro") {
+            workingContext = { kind: "intro" };
           } else {
             log("auto-identify -> unknown, keeping auto");
           }
@@ -173,43 +182,86 @@ Reglas:
       }
     }
 
-    // 2) Imagen de referencia (álbum vacío) si existe para este contexto
-    let reference: { b64: string; mediaType: SupportedMedia } | null = null;
-    let resolvedCustomNumbers: number[] | null = null;
+    type Ref = {
+      b64: string;
+      mediaType: SupportedMedia;
+      label: string;
+      teamSheet?: 1 | 2;
+    };
+    const references: Ref[] = [];
+    let resolvedCustomCodes: string[] | null = null;
     let resolvedCustomLabel: string | null = null;
-    if (workingContext.kind !== "auto") {
-      let refRow: AlbumPage | undefined;
-      if (workingContext.kind === "custom") {
-        if (workingContext.customId) {
-          const { data: refRows } = await supabase
-            .from("album_pages")
-            .select("*")
-            .eq("id", workingContext.customId)
-            .limit(1)
-            .returns<AlbumPage[]>();
-          refRow = refRows?.[0];
-          if (refRow) {
-            resolvedCustomNumbers = refRow.sticker_numbers;
-            resolvedCustomLabel = refRow.custom_label;
-          }
+    if (workingContext.kind === "custom" && workingContext.customId) {
+      const { data: refRows } = await supabase
+        .from("album_pages")
+        .select("*")
+        .eq("id", workingContext.customId)
+        .limit(1)
+        .returns<AlbumPage[]>();
+      const refRow = refRows?.[0];
+      if (refRow) {
+        resolvedCustomCodes = refRow.sticker_codes ?? [];
+        resolvedCustomLabel = refRow.custom_label;
+        const refImg = await downloadAndCompress(
+          supabase,
+          "album-pages",
+          refRow.storage_path,
+          log,
+        );
+        if (refImg.ok) {
+          references.push({
+            b64: refImg.b64,
+            mediaType: refImg.mediaType,
+            label: `Hoja vacía (${refRow.custom_label ?? "custom"})`,
+          });
         }
-      } else {
-        let refQuery = supabase
-          .from("album_pages")
-          .select("*")
-          .eq("kind", workingContext.kind);
-        if (workingContext.kind === "team" && workingContext.teamCode) {
-          refQuery = refQuery.eq("team_code", workingContext.teamCode);
-          if (workingContext.teamSheet) {
-            refQuery = refQuery.eq("team_sheet", workingContext.teamSheet);
-          }
-        }
-        const { data: refRows } = await refQuery
-          .limit(1)
-          .returns<AlbumPage[]>();
-        refRow = refRows?.[0];
       }
-
+    } else if (workingContext.kind === "team" && workingContext.teamCode) {
+      const { data: refRows } = await supabase
+        .from("album_pages")
+        .select("*")
+        .eq("kind", "team")
+        .eq("team_code", workingContext.teamCode)
+        .returns<AlbumPage[]>();
+      const sorted = (refRows ?? []).sort(
+        (a, b) => (a.team_sheet ?? 0) - (b.team_sheet ?? 0),
+      );
+      for (const row of sorted) {
+        const sheet =
+          row.team_sheet === 1 || row.team_sheet === 2 ? row.team_sheet : null;
+        const refImg = await downloadAndCompress(
+          supabase,
+          "album-pages",
+          row.storage_path,
+          log,
+        );
+        if (refImg.ok) {
+          references.push({
+            b64: refImg.b64,
+            mediaType: refImg.mediaType,
+            label: sheet
+              ? `${workingContext.teamCode} hoja ${sheet} vacía`
+              : `${workingContext.teamCode} vacía`,
+            teamSheet: sheet ?? undefined,
+          });
+        }
+      }
+      log("team refs loaded", {
+        count: references.length,
+        sheets: references.map((r) => r.teamSheet),
+      });
+    } else if (
+      workingContext.kind === "coca_cola" ||
+      workingContext.kind === "fwc" ||
+      workingContext.kind === "intro"
+    ) {
+      const { data: refRows } = await supabase
+        .from("album_pages")
+        .select("*")
+        .eq("kind", workingContext.kind)
+        .limit(1)
+        .returns<AlbumPage[]>();
+      const refRow = refRows?.[0];
       if (refRow) {
         const refImg = await downloadAndCompress(
           supabase,
@@ -218,83 +270,94 @@ Reglas:
           log,
         );
         if (refImg.ok) {
-          reference = { b64: refImg.b64, mediaType: refImg.mediaType };
-          log("using reference page", {
-            id: refRow.id,
-            original_kb: refImg.originalKb,
-            compressed_kb: refImg.compressedKb,
-            kind: refRow.kind,
+          references.push({
+            b64: refImg.b64,
+            mediaType: refImg.mediaType,
+            label: `${refRow.kind} vacía`,
           });
-        } else {
-          log("reference download failed", refImg.error);
         }
-      } else {
-        log("no reference page configured for this context");
       }
     }
+    if (references.length === 0 && workingContext.kind !== "auto") {
+      log("no reference page configured for this context");
+    }
 
-    // Lista cerrada de figuritas válidas para esa página
+    let detectionCtx: ScanContext = workingContext;
+    if (
+      workingContext.kind === "team" &&
+      workingContext.teamCode &&
+      references.length >= 1
+    ) {
+      if (references.length >= 2) {
+        detectionCtx = {
+          kind: "team",
+          teamCode: workingContext.teamCode,
+        };
+      } else {
+        const sh = references[0].teamSheet;
+        if (sh)
+          detectionCtx = {
+            kind: "team",
+            teamCode: workingContext.teamCode,
+            teamSheet: sh,
+          };
+      }
+    }
     const enrichedCtx: ScanContext =
-      workingContext.kind === "custom" && resolvedCustomNumbers
+      detectionCtx.kind === "custom" && resolvedCustomCodes
         ? {
-            ...workingContext,
-            customNumbers: resolvedCustomNumbers,
+            ...detectionCtx,
+            customCodes: resolvedCustomCodes,
             customLabel:
-              workingContext.customLabel ?? resolvedCustomLabel ?? undefined,
+              detectionCtx.customLabel ?? resolvedCustomLabel ?? undefined,
           }
-        : workingContext;
+        : detectionCtx;
     const candidates = stickersForContext(enrichedCtx);
-    const validNumbers = candidates.map((s) => s.number);
+    const validCodes = candidates.map((s) => s.code);
     log("context candidates", {
       desc: describeContext(enrichedCtx),
-      count: validNumbers.length,
-      hasReference: !!reference,
+      count: validCodes.length,
+      refsCount: references.length,
     });
 
     const { systemPrompt, userPrompt } = buildPrompt(
       enrichedCtx,
       candidates,
-      !!reference,
+      references,
     );
 
-    log("calling Anthropic for detection", { model });
+    log("calling Anthropic for detection", {
+      model,
+      refs: references.length,
+    });
 
     const messageContent: Anthropic.Messages.ContentBlockParam[] = [];
-    if (reference) {
+    references.forEach((ref, i) => {
       messageContent.push({
         type: "text",
-        text: "IMAGEN 1 (referencia: álbum vacío para esta página):",
+        text: `IMAGEN ${i + 1} (${ref.label}):`,
       });
       messageContent.push({
         type: "image",
         source: {
           type: "base64",
-          media_type: reference.mediaType,
-          data: reference.b64,
+          media_type: ref.mediaType,
+          data: ref.b64,
         },
       });
-      messageContent.push({
-        type: "text",
-        text: "IMAGEN 2 (foto del usuario, álbum real):",
-      });
-      messageContent.push({
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: userImage.mediaType,
-          data: userImage.b64,
-        },
-      });
-    } else {
-      messageContent.push({
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: userImage.mediaType,
-          data: userImage.b64,
-        },
-      });
-    }
+    });
+    messageContent.push({
+      type: "text",
+      text: `IMAGEN ${references.length + 1} (foto del usuario):`,
+    });
+    messageContent.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: userImage.mediaType,
+        data: userImage.b64,
+      },
+    });
     messageContent.push({ type: "text", text: userPrompt });
 
     const startedAt = Date.now();
@@ -320,16 +383,39 @@ Reglas:
     });
     log("anthropic raw text:\n" + text);
 
-    let detected = parseDetected(text);
+    const parsedRes = parseDetected(text);
+    let detected = parsedRes.detected;
+    const detectedSheet = parsedRes.sheet;
     const beforeFilter = detected.length;
 
-    if (workingContext.kind !== "auto" && validNumbers.length > 0) {
-      const valid = new Set(validNumbers);
-      detected = detected.filter((n) => valid.has(n));
+    let finalCtx: ScanContext = enrichedCtx;
+    if (
+      enrichedCtx.kind === "team" &&
+      enrichedCtx.teamCode &&
+      !enrichedCtx.teamSheet &&
+      (detectedSheet === 1 || detectedSheet === 2)
+    ) {
+      finalCtx = {
+        kind: "team",
+        teamCode: enrichedCtx.teamCode,
+        teamSheet: detectedSheet,
+      };
+      const sheetStickers = splitTeamSheet(
+        stickersOfTeam(enrichedCtx.teamCode),
+        detectedSheet,
+      );
+      const sheetCodes = new Set(sheetStickers.map((s) => s.code));
+      detected = detected.filter((c) => sheetCodes.has(c));
+    } else if (enrichedCtx.kind !== "auto" && validCodes.length > 0) {
+      const valid = new Set(validCodes);
+      detected = detected.filter((c) => valid.has(c));
+    } else {
+      detected = detected.filter((c) => isValidCode(c));
     }
 
     log("parsed", {
       total_in_raw: beforeFilter,
+      detected_sheet: detectedSheet,
       after_context_filter: detected.length,
       detected,
     });
@@ -337,7 +423,7 @@ Reglas:
     await supabase
       .from("scans")
       .update({
-        detected_numbers: detected,
+        detected_codes: detected,
         status: "done",
       })
       .eq("id", scanId);
@@ -345,10 +431,12 @@ Reglas:
     return NextResponse.json({
       reqId,
       detected,
-      context: enrichedCtx,
-      contextDescription: describeContext(enrichedCtx),
-      candidatesCount: validNumbers.length,
-      usedReference: !!reference,
+      context: finalCtx,
+      contextDescription: describeContext(finalCtx),
+      candidatesCount: validCodes.length,
+      usedReference: references.length > 0,
+      referencesCount: references.length,
+      detectedSheet,
       autoIdentified,
       raw: text,
       durationMs,
@@ -388,8 +476,7 @@ async function downloadAndCompress(
   const originalKb = Math.round(original.length / 1024);
 
   try {
-    let pipeline = sharp(original, { failOn: "none" }).rotate(); // honra EXIF
-    const meta = await pipeline.metadata();
+    const meta = await sharp(original, { failOn: "none" }).rotate().metadata();
     const w = meta.width ?? 0;
     const h = meta.height ?? 0;
     const maxSide = Math.max(w, h);
@@ -399,7 +486,6 @@ async function downloadAndCompress(
     let out: Buffer | null = null;
     let lastWH = { width: w, height: h };
 
-    // Bajamos quality y, si todavía no alcanza, bajamos también la resolución.
     for (let attempt = 0; attempt < 8; attempt++) {
       let p = sharp(original, { failOn: "none" }).rotate();
       if (maxSide > targetSide) {
@@ -430,7 +516,7 @@ async function downloadAndCompress(
         targetSide = Math.round(targetSide * 0.8);
         quality = 80;
       } else {
-        out = buf; // último recurso
+        out = buf;
         break;
       }
     }
@@ -457,54 +543,113 @@ async function downloadAndCompress(
 function buildPrompt(
   ctx: ScanContext,
   candidates: Sticker[],
-  hasReference: boolean,
+  references: { label: string; teamSheet?: 1 | 2 }[],
 ): { systemPrompt: string; userPrompt: string } {
   if (ctx.kind === "auto" || candidates.length === 0) {
     return {
-      systemPrompt: `Sos un sistema OCR experto en álbumes Panini "FIFA World Cup 2026" (980 figuritas).
-Devolvés SOLO un JSON: { "detected": [<numero>, ...], "notes": "..." }.
-Reglas estrictas:
-- "detected" lista los números de las figuritas PEGADAS (visibles encima del slot del álbum).
-- Ignorá las casillas vacías (silueta o número del slot sin pegatina).
-- Los números están entre 1 y 980.
-- Cada figurita tiene su número impreso. Usalo si es legible.
-- No inventes. Si dudás de un número, omitilo.
-- Sin texto antes o después del JSON, sin markdown.`,
+      systemPrompt: `Sos un sistema OCR experto en álbumes Panini "FIFA World Cup 2026" (994 stickers identificados por CÓDIGO).
+Devolvés SOLO un JSON: { "detected": ["<codigo>", ...], "notes": "..." }.
+
+Códigos posibles:
+- Selecciones: <CODE>1 a <CODE>20 (ej: ARG1, BRA13, COL7). Códigos válidos de selección: ${TEAMS.map(
+        (t) => t.code,
+      ).join(", ")}.
+- Coca-Cola: CC1..CC14.
+- FIFA World Cup specials: FWC1..FWC19.
+- Portada: "00".
+
+Reglas:
+- "detected" lista los CÓDIGOS de las figuritas PEGADAS (visibles encima del slot del álbum).
+- Ignorá las casillas vacías (silueta o slot sin pegatina).
+- Cada figurita tiene su código impreso pequeño (ej "ARG3", "FWC7", "CC2"). Usalo si es legible.
+- No inventes. Si dudás, omitilo.
+- Sin texto antes o después del JSON.`,
       userPrompt:
-        "Detectá las figuritas pegadas en esta página del álbum. Devolvé SOLO el JSON.",
+        "Detectá las figuritas pegadas en esta página del álbum. Devolvé SOLO el JSON con CÓDIGOS.",
     };
   }
 
   const desc = describeContext(ctx);
-  const numbers = candidates.map((s) => s.number);
-  const min = Math.min(...numbers);
-  const max = Math.max(...numbers);
+  const codes = candidates.map((s) => s.code);
+  const minCode = codes[0];
+  const maxCode = codes[codes.length - 1];
   const list = candidates
-    .map((s) => `  ${s.number}: ${s.name}${s.role ? ` (${s.role})` : ""}`)
+    .map((s) => `  ${s.code}: ${s.name}${s.role ? ` (${s.role})` : ""}`)
     .join("\n");
 
-  if (hasReference) {
+  const hasDualSheets =
+    ctx.kind === "team" &&
+    references.length >= 2 &&
+    references.some((r) => r.teamSheet === 1) &&
+    references.some((r) => r.teamSheet === 2);
+
+  if (hasDualSheets) {
+    const sheet1 = candidates.filter(
+      (s) => s.teamNumber && s.teamNumber >= 1 && s.teamNumber <= 10,
+    );
+    const sheet2 = candidates.filter(
+      (s) => s.teamNumber && s.teamNumber >= 11 && s.teamNumber <= 20,
+    );
+    const list1 = sheet1
+      .map((s) => `  ${s.code}: ${s.name}${s.role ? ` (${s.role})` : ""}`)
+      .join("\n");
+    const list2 = sheet2
+      .map((s) => `  ${s.code}: ${s.name}${s.role ? ` (${s.role})` : ""}`)
+      .join("\n");
+
+    const systemPrompt = `Sos un OCR experto en álbumes Panini "FIFA World Cup 2026" trabajando en MODO COMPARACIÓN MÚLTIPLE.
+
+Te paso TRES imágenes:
+- IMAGEN 1: HOJA 1 vacía del equipo (${desc.split("·")[0].trim()}). Esta hoja contiene el escudo (<CODE>1) y 9 jugadores (<CODE>2..10).
+- IMAGEN 2: HOJA 2 vacía del mismo equipo. Esta hoja contiene 9 jugadores y la foto grupal (<CODE>13).
+- IMAGEN 3: la foto del usuario (su álbum real).
+
+Tu tarea es DOBLE:
+1) Decidir si la IMAGEN 3 corresponde a la HOJA 1 o la HOJA 2 (la que más se parezca en estructura a esa hoja vacía).
+2) Detectar qué stickers están pegados en la IMAGEN 3 y devolver sus CÓDIGOS.
+
+CÓDIGOS DE LA HOJA 1:
+${list1}
+
+CÓDIGOS DE LA HOJA 2:
+${list2}
+
+REGLAS:
+1. Devolvés SOLO un objeto JSON:
+   { "sheet": 1|2, "detected": ["<codigo>", ...], "notes": "..." }
+2. "sheet" es la hoja que coincide visualmente con la IMAGEN 3.
+3. "detected" = códigos UNICAMENTE de la hoja elegida que están PEGADOS en la IMAGEN 3 y no en la hoja vacía correspondiente.
+4. Si dudás, omití el código.
+5. Sin markdown ni texto fuera del JSON.`;
+
+    const userPrompt = `Compará la IMAGEN 3 (foto del usuario) contra IMAGEN 1 (hoja 1 vacía) e IMAGEN 2 (hoja 2 vacía).
+Decime qué hoja es y qué figuritas están pegadas (con sus códigos). Devolvé SOLO el JSON.`;
+
+    return { systemPrompt, userPrompt };
+  }
+
+  if (references.length >= 1) {
     const systemPrompt = `Sos un OCR experto en álbumes Panini "FIFA World Cup 2026" trabajando en MODO COMPARACIÓN.
 
 Te paso DOS imágenes:
-- IMAGEN 1: la página del álbum VACÍA (referencia). Te muestra exactamente cómo se ve la página sin ninguna figurita pegada.
-- IMAGEN 2: la página del álbum del USUARIO. Acá puede haber figuritas pegadas encima de algunos slots.
+- IMAGEN 1: la página del álbum VACÍA (referencia).
+- IMAGEN 2: la página del álbum del USUARIO (puede tener figuritas pegadas).
 
 Tu tarea: comparar IMAGEN 2 contra IMAGEN 1 y decirme qué slots tienen sticker pegado en la 2 pero están vacíos en la 1.
 
 CONTEXTO DE LA PÁGINA: ${desc}
-Rango de números válidos: ${min} a ${max}.
-LISTA EXACTA DE FIGURITAS POSIBLES:
+Rango de códigos válidos: ${minCode} a ${maxCode}.
+LISTA EXACTA DE CÓDIGOS POSIBLES:
 ${list}
 
 REGLAS:
-1. Devolvés SOLO un objeto JSON: { "detected": [<numero>, ...], "notes": "..." }.
-2. "detected" = números de la lista de arriba que están PEGADOS en IMAGEN 2 y no en IMAGEN 1.
-3. NO incluyas slots que se ven igual en ambas imágenes (esos están vacíos).
-4. Si dudás, omití el número.
+1. Devolvés SOLO un objeto JSON: { "detected": ["<codigo>", ...], "notes": "..." }.
+2. "detected" = códigos de la lista de arriba que están PEGADOS en IMAGEN 2 y no en IMAGEN 1.
+3. NO incluyas slots que se ven igual en ambas imágenes.
+4. Si dudás, omití el código.
 5. Sin texto antes/después del JSON.`;
 
-    const userPrompt = `Compará las dos imágenes y devolveme qué figuritas están pegadas en la del usuario (IMAGEN 2) usando la vacía (IMAGEN 1) como referencia.
+    const userPrompt = `Compará las dos imágenes y devolveme qué figuritas (códigos) están pegadas en la del usuario.
 Esta página es: ${desc}.
 Devolvé SOLO el JSON.`;
 
@@ -515,52 +660,59 @@ Devolvé SOLO el JSON.`;
 
 CONTEXTO DE LA FOTO:
 ${desc}
-Números válidos para esta página: del ${min} al ${max} (lista completa abajo).
+Códigos válidos para esta página: ${minCode} a ${maxCode}.
 
-LISTA EXACTA DE FIGURITAS POSIBLES:
+LISTA EXACTA DE CÓDIGOS POSIBLES:
 ${list}
 
 REGLAS:
-1. Devolvés SOLO un JSON: { "detected": [<numero>, ...], "notes": "..." }.
-2. "detected" lista UNICAMENTE números de la lista de arriba.
-3. Una figurita está "pegada" cuando hay una pegatina visible que tapa el slot. NO si solo se ve la silueta y número impresos por el álbum.
-4. Cuando dudes, omití el número.
-5. NO incluyas números fuera del rango ${min}-${max}.
+1. Devolvés SOLO un JSON: { "detected": ["<codigo>", ...], "notes": "..." }.
+2. "detected" lista UNICAMENTE códigos de la lista de arriba.
+3. Una figurita está "pegada" cuando hay una pegatina visible que tapa el slot. NO si solo se ve la silueta y código impresos por el álbum.
+4. Cuando dudes, omití el código.
+5. NO inventes códigos fuera de la lista.
 6. Sin texto antes/después del JSON.`;
 
   const userPrompt = `Esta foto corresponde a: ${desc}.
-Devolveme qué figuritas están pegadas. Devolvé SOLO el JSON.`;
+Devolveme qué figuritas (códigos) están pegadas. Devolvé SOLO el JSON.`;
 
   return { systemPrompt, userPrompt };
 }
 
-function parseDetected(text: string): number[] {
-  try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed?.detected)) return cleanNumbers(parsed.detected);
-  } catch {}
-
-  const match = text.match(/\{[\s\S]*"detected"[\s\S]*\}/);
-  if (match) {
+function parseDetected(text: string): { detected: string[]; sheet?: 1 | 2 } {
+  const tryJson = (raw: string) => {
     try {
-      const parsed = JSON.parse(match[0]);
-      if (Array.isArray(parsed?.detected)) return cleanNumbers(parsed.detected);
+      const p = JSON.parse(raw);
+      if (p && typeof p === "object") return p;
     } catch {}
+    return null;
+  };
+  let parsed = tryJson(text);
+  if (!parsed) {
+    const m = text.match(/\{[\s\S]*"detected"[\s\S]*\}/);
+    if (m) parsed = tryJson(m[0]);
+  }
+  if (parsed && Array.isArray(parsed.detected)) {
+    const sheet =
+      parsed.sheet === 1 || parsed.sheet === 2 ? parsed.sheet : undefined;
+    return { detected: cleanCodes(parsed.detected), sheet };
   }
 
-  const nums = Array.from(text.matchAll(/\b(\d{1,3})\b/g))
-    .map((m) => Number(m[1]))
-    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 980);
-  return cleanNumbers(nums);
+  // Fallback: extraer códigos del texto plano.
+  const tokens = Array.from(
+    text.matchAll(/\b(00|FWC\d{1,2}|CC\d{1,2}|[A-Z]{2,3}\d{1,2})\b/g),
+  ).map((m) => m[1]);
+  return { detected: cleanCodes(tokens) };
 }
 
-function cleanNumbers(arr: unknown[]): number[] {
-  const out = new Set<number>();
+function cleanCodes(arr: unknown[]): string[] {
+  const out = new Set<string>();
   for (const v of arr) {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 1 && n <= 980) out.add(Math.floor(n));
+    if (typeof v !== "string" && typeof v !== "number") continue;
+    const parsed = parseStickerCode(String(v));
+    if (parsed) out.add(parsed.code);
   }
-  return Array.from(out).sort((a, b) => a - b);
+  return Array.from(out).sort();
 }
 
 function parseIdentify(
@@ -580,11 +732,14 @@ function parseIdentify(
   }
   if (!parsed) return null;
   const kind = String(parsed.kind ?? "").toLowerCase();
-  if (!["team", "coca_cola", "special", "unknown"].includes(kind)) return null;
+  if (!["team", "coca_cola", "fwc", "intro", "unknown"].includes(kind))
+    return null;
   return {
     kind,
     teamCode:
-      typeof parsed.teamCode === "string" ? parsed.teamCode.toUpperCase() : undefined,
+      typeof parsed.teamCode === "string"
+        ? parsed.teamCode.toUpperCase()
+        : undefined,
     teamSheet:
       parsed.teamSheet === 1 || parsed.teamSheet === 2
         ? parsed.teamSheet

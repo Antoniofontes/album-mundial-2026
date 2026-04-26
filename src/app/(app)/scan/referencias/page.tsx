@@ -14,7 +14,13 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { ALBUM, stickersForContext, describeContext } from "@/lib/album";
+import {
+  ALBUM_BY_CODE,
+  stickersForContext,
+  describeContext,
+  isValidCode,
+  parseStickerCode,
+} from "@/lib/album";
 import type { AlbumPage, AlbumPageKind } from "@/lib/supabase/types";
 import { compressForUpload } from "@/lib/compressImage";
 
@@ -25,7 +31,7 @@ type Slot = {
   teamSheet?: 1 | 2;
   customLabel?: string;
   label: string;
-  stickerNumbers: number[];
+  stickerCodes: string[];
   existing?: AlbumPage;
 };
 
@@ -49,28 +55,32 @@ export default function ReferenciasPage() {
           teamCode: t.code,
           teamSheet: sheet,
           label: `${t.flag} ${t.name} · hoja ${sheet}`,
-          stickerNumbers: stickersForContext({
+          stickerCodes: stickersForContext({
             kind: "team",
             teamCode: t.code,
             teamSheet: sheet,
-          }).map((s) => s.number),
+          }).map((s) => s.code),
         });
       }
     }
     out.push({
-      id: "coca_cola",
-      kind: "coca_cola",
-      label: "Coca-Cola (12 cromos)",
-      stickerNumbers: stickersForContext({ kind: "coca_cola" }).map(
-        (s) => s.number,
-      ),
+      id: "intro",
+      kind: "intro",
+      label: "Portada · 00",
+      stickerCodes: stickersForContext({ kind: "intro" }).map((s) => s.code),
     });
     out.push({
-      id: "special",
-      kind: "special",
-      label: "Especiales / Portada (8 cromos)",
-      stickerNumbers: stickersForContext({ kind: "special" }).map(
-        (s) => s.number,
+      id: "fwc",
+      kind: "fwc",
+      label: "FIFA World Cup · FWC1–FWC19",
+      stickerCodes: stickersForContext({ kind: "fwc" }).map((s) => s.code),
+    });
+    out.push({
+      id: "coca_cola",
+      kind: "coca_cola",
+      label: "Coca-Cola · CC1–CC14",
+      stickerCodes: stickersForContext({ kind: "coca_cola" }).map(
+        (s) => s.code,
       ),
     });
     return out;
@@ -190,7 +200,7 @@ export default function ReferenciasPage() {
           .from("album_pages")
           .update({
             storage_path: path,
-            sticker_numbers: slot.stickerNumbers,
+            sticker_codes: slot.stickerCodes,
             updated_at: new Date().toISOString(),
             uploaded_by: user.id,
           })
@@ -207,7 +217,7 @@ export default function ReferenciasPage() {
           team_sheet: slot.teamSheet ?? null,
           custom_label: slot.customLabel ?? null,
           storage_path: path,
-          sticker_numbers: slot.stickerNumbers,
+          sticker_codes: slot.stickerCodes,
           uploaded_by: user.id,
         });
         if (insErr) {
@@ -328,8 +338,8 @@ export default function ReferenciasPage() {
           </button>
         </div>
         <p className="text-[11px] text-[color:var(--muted)] mb-3">
-          Para hojas no estándar (portada, mascotas, copa, países sede,
-          campeones del mundo, etc.). Vos definís qué cromos van.
+          Para hojas no estándar (mascotas, copa, países sede, campeones, etc.).
+          Vos definís qué códigos van.
         </p>
 
         {customPages.length === 0 && (
@@ -360,9 +370,9 @@ export default function ReferenciasPage() {
                     {p.custom_label ?? "Hoja sin nombre"}
                   </p>
                   <p className="text-[11px] text-[color:var(--muted)] truncate">
-                    {p.sticker_numbers.length} cromos:{" "}
-                    {p.sticker_numbers.slice(0, 8).join(", ")}
-                    {p.sticker_numbers.length > 8 ? "..." : ""}
+                    {p.sticker_codes.length} cromos:{" "}
+                    {p.sticker_codes.slice(0, 8).join(", ")}
+                    {p.sticker_codes.length > 8 ? "..." : ""}
                   </p>
                 </div>
                 <button
@@ -386,7 +396,7 @@ export default function ReferenciasPage() {
       <section className="mt-6">
         <h2 className="text-sm font-bold mb-2">Hojas estándar</h2>
         <p className="text-[11px] text-[color:var(--muted)] mb-3">
-          96 hojas de equipos (2 por país) + 2 secciones especiales.
+          96 hojas de equipos (2 por país) + 3 secciones (00 · FWC · CC).
         </p>
         <ul className="space-y-2">
           {presetSlotsWithExisting.map((slot) => {
@@ -403,6 +413,8 @@ export default function ReferenciasPage() {
                   }
                 : { kind: slot.kind },
             );
+            const first = slot.stickerCodes[0];
+            const last = slot.stickerCodes[slot.stickerCodes.length - 1];
             return (
               <li
                 key={slot.id}
@@ -428,9 +440,7 @@ export default function ReferenciasPage() {
                     {slot.label}
                   </p>
                   <p className="text-[11px] text-[color:var(--muted)] truncate">
-                    {slot.stickerNumbers.length} cromos · #
-                    {slot.stickerNumbers[0]}–#
-                    {slot.stickerNumbers[slot.stickerNumbers.length - 1]}
+                    {slot.stickerCodes.length} cromos · {first}–{last}
                   </p>
                   {slot.existing && (
                     <p className="text-[10px] text-emerald-400 flex items-center gap-1 mt-0.5">
@@ -497,13 +507,13 @@ function CustomPageModal({
   onSaved: (p: AlbumPage) => void;
 }) {
   const [label, setLabel] = useState("");
-  const [numbersText, setNumbersText] = useState("");
+  const [codesText, setCodesText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const parsedNumbers = useMemo(() => parseRanges(numbersText), [numbersText]);
+  const parsedCodes = useMemo(() => parseCodeRanges(codesText), [codesText]);
 
   function handleFile(f: File) {
     setFile(f);
@@ -518,9 +528,9 @@ function CustomPageModal({
       setErr("Poné un nombre.");
       return;
     }
-    if (parsedNumbers.length === 0) {
+    if (parsedCodes.length === 0) {
       setErr(
-        "Tenés que poner al menos un número. Ej: 1, 2, 3 o 1-5 o 1, 5-10",
+        'Tenés que poner al menos un código. Ej: "FWC1, FWC2, FWC3" o "FWC1-FWC10" o "00, ARG13".',
       );
       return;
     }
@@ -569,7 +579,7 @@ function CustomPageModal({
         .insert({
           kind: "custom",
           custom_label: label.trim(),
-          sticker_numbers: parsedNumbers,
+          sticker_codes: parsedCodes,
           storage_path: path,
           uploaded_by: user.id,
         })
@@ -602,29 +612,29 @@ function CustomPageModal({
             <input
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder="Ej: Portada / 00, Copa y pelota, Países sede"
+              placeholder="Ej: Portada · Copa y pelota · Países sede"
               className="w-full mt-1 rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm"
             />
           </div>
 
           <div>
             <label className="text-xs font-semibold">
-              Números de figuritas en esta hoja
+              Códigos de figuritas en esta hoja
             </label>
             <input
-              value={numbersText}
-              onChange={(e) => setNumbersText(e.target.value)}
-              placeholder="Ej: 973, 974, 975 ó 973-980 ó 1, 5-10"
+              value={codesText}
+              onChange={(e) => setCodesText(e.target.value)}
+              placeholder="Ej: 00, FWC1-FWC8 ó CC1-CC14 ó ARG13, BRA13"
               className="w-full mt-1 rounded-lg bg-[color:var(--card-bg)] border border-[color:var(--card-border)] px-3 py-2 text-sm font-mono"
             />
             <p className="text-[11px] text-[color:var(--muted)] mt-1">
-              Detectados: {parsedNumbers.length} números (
-              {parsedNumbers.slice(0, 12).join(", ")}
-              {parsedNumbers.length > 12 ? "..." : ""})
+              Detectados: {parsedCodes.length} códigos (
+              {parsedCodes.slice(0, 12).join(", ")}
+              {parsedCodes.length > 12 ? "..." : ""})
             </p>
             <p className="text-[10px] text-[color:var(--muted)]">
-              Cromos especiales válidos: 973–980 (los 8 misceláneos del álbum).
-              Si tu álbum tiene la disposición distinta, usá los números reales.
+              Códigos válidos: 00, FWC1–FWC19, CC1–CC14 y los <code>&lt;CODE&gt;1–20</code>
+              {" "}de cada selección (ej ARG12).
             </p>
           </div>
 
@@ -691,26 +701,38 @@ function CustomPageModal({
   );
 }
 
-/** Parsea "1, 5-10, 12" => [1, 5, 6, 7, 8, 9, 10, 12] */
-function parseRanges(text: string): number[] {
-  const set = new Set<number>();
+/**
+ * Parsea texto de códigos. Soporta:
+ *  - Códigos sueltos: "00, ARG13, FWC3"
+ *  - Rangos cuyos extremos comparten prefijo: "FWC1-FWC8", "CC1-CC14", "ARG2-ARG10"
+ *  - Mezcla: "00, FWC1-FWC5, ARG13"
+ */
+function parseCodeRanges(text: string): string[] {
+  const set = new Set<string>();
   const parts = text.split(/[,\s]+/).filter(Boolean);
-  for (const p of parts) {
-    const m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part) continue;
+    const m = part.match(/^([A-Za-z]*)(\d+)\s*-\s*([A-Za-z]*)(\d+)$/);
     if (m) {
-      const a = Number(m[1]);
-      const b = Number(m[2]);
-      if (Number.isFinite(a) && Number.isFinite(b)) {
-        const lo = Math.min(a, b);
-        const hi = Math.max(a, b);
-        for (let i = lo; i <= hi; i++) {
-          if (i >= 1 && i <= 980 && ALBUM[i - 1]) set.add(i);
-        }
+      const p1 = m[1].toUpperCase();
+      const a = Number(m[2]);
+      const p2 = m[3].toUpperCase();
+      const b = Number(m[4]);
+      const prefix = p1 || p2;
+      if ((p1 && p2 && p1 !== p2) || !Number.isFinite(a) || !Number.isFinite(b))
+        continue;
+      const lo = Math.min(a, b);
+      const hi = Math.max(a, b);
+      for (let i = lo; i <= hi; i++) {
+        const cand = `${prefix}${i}`;
+        const parsed = parseStickerCode(cand);
+        if (parsed && ALBUM_BY_CODE[parsed.code]) set.add(parsed.code);
       }
     } else {
-      const n = Number(p);
-      if (Number.isFinite(n) && n >= 1 && n <= 980) set.add(n);
+      const parsed = parseStickerCode(part);
+      if (parsed && isValidCode(parsed.code)) set.add(parsed.code);
     }
   }
-  return Array.from(set).sort((a, b) => a - b);
+  return Array.from(set);
 }

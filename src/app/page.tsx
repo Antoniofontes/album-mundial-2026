@@ -31,7 +31,7 @@ export default async function Home() {
             siempre con vos
           </h1>
           <p className="mt-4 text-[color:var(--muted)]">
-            980 figuritas. 48 selecciones. Marcá las que tenés, escaneá el álbum
+            994 figuritas. 48 selecciones. Marcá las que tenés, escaneá el álbum
             con la cámara y arreglá intercambios con amigos en segundos.
           </p>
         </div>

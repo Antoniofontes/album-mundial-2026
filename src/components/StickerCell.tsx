@@ -40,9 +40,9 @@ export function StickerCell({ sticker, count, onChange, readOnly }: Props) {
         sticker.premium && "premium",
         readOnly && "cursor-default",
       )}
-      aria-label={`Figurita ${sticker.number} ${sticker.name}`}
+      aria-label={`Figurita ${sticker.code} ${sticker.name}`}
     >
-      <span className="sticker-num">{sticker.number}</span>
+      <span className="sticker-num">{sticker.code}</span>
       <span className="sticker-name">{sticker.name}</span>
       {count > 1 && (
         <span className="absolute -top-2 -right-2 bg-[color:var(--accent)] text-white text-[10px] font-bold rounded-full w-6 h-6 flex items-center justify-center shadow">

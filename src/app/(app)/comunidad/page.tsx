@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { MarkedFriend, Holding, UserStats } from "@/lib/supabase/types";
-import { ALBUM_BY_NUMBER } from "@/lib/album";
+import { ALBUM_BY_CODE } from "@/lib/album";
 import { useCollection } from "@/lib/store";
 import { Plus, Search, Users, UserPlus, Trash2 } from "lucide-react";
 
@@ -12,7 +12,7 @@ type FriendStat = {
   id: string;
   name: string;
   source: "marked" | "user";
-  hasNumbers: number[];
+  hasCodes: string[];
 };
 
 export default function ComunidadPage() {
@@ -85,17 +85,17 @@ export default function ComunidadPage() {
   const friendStats: FriendStat[] = useMemo(() => {
     const out: FriendStat[] = [];
     for (const f of friends) {
-      const nums = holdings
+      const codes = holdings
         .filter((h) => h.marked_friend_id === f.id)
-        .map((h) => h.sticker_number);
-      out.push({ id: f.id, name: f.name, source: "marked", hasNumbers: nums });
+        .map((h) => h.sticker_code);
+      out.push({ id: f.id, name: f.name, source: "marked", hasCodes: codes });
     }
     for (const u of otherUsers) {
       out.push({
         id: u.user_id,
         name: u.display_name + " (@" + u.username + ")",
         source: "user",
-        hasNumbers: [],
+        hasCodes: [],
       });
     }
     return out;
@@ -107,9 +107,7 @@ export default function ComunidadPage() {
 
   const myMissing = useMemo(
     () =>
-      Object.keys(ALBUM_BY_NUMBER)
-        .map(Number)
-        .filter((n) => (collection[n] ?? 0) === 0),
+      Object.keys(ALBUM_BY_CODE).filter((c) => (collection[c] ?? 0) === 0),
     [collection],
   );
 
@@ -211,10 +209,11 @@ function FriendCard({
   onRemove,
 }: {
   friend: FriendStat;
-  myMissing: number[];
+  myMissing: string[];
   onRemove?: () => void;
 }) {
-  const useful = friend.hasNumbers.filter((n) => myMissing.includes(n));
+  const missingSet = new Set(myMissing);
+  const useful = friend.hasCodes.filter((c) => missingSet.has(c));
   return (
     <div className="card !p-3">
       <div className="flex items-center justify-between gap-2">
@@ -229,7 +228,7 @@ function FriendCard({
           <div className="font-semibold truncate">{friend.name}</div>
           <div className="text-xs text-[color:var(--muted)] mt-0.5">
             {friend.source === "marked"
-              ? `Tiene ${friend.hasNumbers.length} marcadas`
+              ? `Tiene ${friend.hasCodes.length} marcadas`
               : "Usuario público"}
             {useful.length > 0 && (
               <span className="ml-2 text-[color:var(--accent)] font-bold">

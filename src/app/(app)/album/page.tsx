@@ -12,9 +12,9 @@ export default function AlbumPage() {
   const loaded = useCollection((s) => s.loaded);
 
   const stats = useMemo(() => {
-    const owned = ALBUM.filter((s) => (collection[s.number] ?? 0) > 0).length;
+    const owned = ALBUM.filter((s) => (collection[s.code] ?? 0) > 0).length;
     const dups = ALBUM.reduce(
-      (acc, s) => acc + Math.max(0, (collection[s.number] ?? 0) - 1),
+      (acc, s) => acc + Math.max(0, (collection[s.code] ?? 0) - 1),
       0,
     );
     return { owned, dups, total: ALBUM.length };
@@ -24,10 +24,11 @@ export default function AlbumPage() {
 
   const extrasCount = useMemo(() => {
     const extras = ALBUM.filter(
-      (s) => s.type === "coca_cola" || s.type === "special",
+      (s) =>
+        s.type === "coca_cola" || s.type === "fwc" || s.type === "intro",
     );
     const ownedExtras = extras.filter(
-      (s) => (collection[s.number] ?? 0) > 0,
+      (s) => (collection[s.code] ?? 0) > 0,
     ).length;
     return { owned: ownedExtras, total: extras.length };
   }, [collection]);
@@ -89,7 +90,7 @@ export default function AlbumPage() {
             {grouped[g].map((team) => {
               const teamStickers = stickersOfTeam(team.code);
               const owned = teamStickers.filter(
-                (s) => (collection[s.number] ?? 0) > 0,
+                (s) => (collection[s.code] ?? 0) > 0,
               ).length;
               const pct = Math.round((owned / teamStickers.length) * 100);
               return (
@@ -125,7 +126,7 @@ export default function AlbumPage() {
           href="/album/lista"
           className="inline-flex items-center gap-2 text-sm text-[color:var(--muted)] underline"
         >
-          <BookOpen className="w-4 h-4" /> Ver las 980 en una sola lista
+          <BookOpen className="w-4 h-4" /> Ver las 994 en una sola lista
         </Link>
       </div>
     </div>

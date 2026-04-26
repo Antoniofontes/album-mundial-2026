@@ -1,30 +1,51 @@
 import { TEAMS } from "./teams";
 
+/**
+ * Modelo real del álbum Panini "FIFA World Cup 2026".
+ *
+ * Cada sticker tiene un CÓDIGO impreso (string), no un número global.
+ * Categorías:
+ *   - 48 selecciones × 20 stickers = 960
+ *       Por equipo se numeran <CODE>1 … <CODE>20:
+ *         · <CODE>1   = escudo de la selección                 (hoja 1)
+ *         · <CODE>2..10 = 9 jugadores                            (hoja 1)
+ *         · <CODE>11..12 = 2 jugadores                           (hoja 2)
+ *         · <CODE>13  = foto grupal del equipo                  (hoja 2)
+ *         · <CODE>14..20 = 7 jugadores                           (hoja 2)
+ *       Hoja 1 trae 10 stickers, hoja 2 trae 10 stickers.
+ *   - Portada: "00"                                              1
+ *   - FIFA World Cup specials: FWC1..FWC19                      19
+ *   - Coca-Cola: CC1..CC14                                       14
+ *
+ * Total: 994 stickers.
+ */
+
 export type StickerType =
-  | "team_logo" // escudo de selección
-  | "team_photo" // foto grupal del equipo
+  | "team_logo" // escudo de selección (<CODE>1)
+  | "team_photo" // foto grupal del equipo (<CODE>13)
   | "player" // jugador
-  | "coca_cola" // exclusivos Coca-Cola
-  | "special"; // misceláneos / portada / mascotas / pelota / etc. (8)
+  | "coca_cola" // exclusivos Coca-Cola (CC1..CC14)
+  | "fwc" // FIFA World Cup specials (FWC1..FWC19)
+  | "intro"; // portada (00)
 
 export type Sticker = {
-  /** número oficial Panini (1..980) */
-  number: number;
-  /** código único interno */
+  /** Código impreso en el sticker (identificador real). Ej: "ARG12", "FWC3", "CC7", "00". */
   code: string;
-  /** tipo */
+  /** Tipo de figurita */
   type: StickerType;
-  /** equipo asociado (si aplica) */
+  /** Equipo asociado (sólo para team_logo, team_photo, player). */
   team?: string;
-  /** nombre / etiqueta */
+  /** Número dentro del equipo (1..20). Solo para tipos de equipo. */
+  teamNumber?: number;
+  /** Nombre / etiqueta humana */
   name: string;
-  /** posición o rol opcional */
+  /** Posición o rol opcional */
   role?: string;
-  /** si la figurita es brillante/foil/premium */
+  /** Si la figurita es brillante / foil / premium. */
   premium?: boolean;
 };
 
-const COCA_COLA_PLAYERS = [
+const COCA_COLA_PLAYERS: { team: string; name: string }[] = [
   { team: "CAN", name: "Alphonso Davies" },
   { team: "USA", name: "Antonee Robinson" },
   { team: "MEX", name: "Edson Álvarez" },
@@ -37,6 +58,8 @@ const COCA_COLA_PLAYERS = [
   { team: "MEX", name: "Santiago Giménez" },
   { team: "NED", name: "Virgil van Dijk" },
   { team: "USA", name: "Weston McKennie" },
+  { team: "POR", name: "Cristiano Ronaldo" },
+  { team: "FRA", name: "Kylian Mbappé" },
 ];
 
 /** Plantilla de roles tentativos por equipo (18 jugadores) */
@@ -208,78 +231,81 @@ const KNOWN_SQUADS: Record<string, string[]> = {
   ],
 };
 
-/**
- * Estructura confirmada (Panini Mundial 2026):
- * - 48 equipos × 20 cromos = 960
- *     · escudo (1) + foto grupal (1) + 18 jugadores
- *     · 2 hojas físicas por equipo
- * - 12 Coca-Cola
- * - 8 cromos especiales (portada / 00 / mascotas / pelota / sedes / etc.)
- *   → Estos los modelamos genéricos. La disposición real por hoja se
- *     define mediante "hojas custom" en Supabase (album_pages.kind='custom').
- *
- * Total: 980.
- */
 export function buildAlbum(): Sticker[] {
   const stickers: Sticker[] = [];
-  let n = 1;
 
-  // 1 -> 960: 48 equipos × 20
+  // 1) Selecciones: 48 × 20 = 960
   for (const team of TEAMS) {
-    stickers.push({
-      number: n++,
-      code: `${team.code}-LOGO`,
-      type: "team_logo",
-      team: team.code,
-      name: `Escudo ${team.name}`,
-      premium: true,
-    });
-    stickers.push({
-      number: n++,
-      code: `${team.code}-PHOTO`,
-      type: "team_photo",
-      team: team.code,
-      name: `Foto grupal ${team.name}`,
-    });
     const squad = KNOWN_SQUADS[team.code];
-    for (let i = 0; i < 18; i++) {
-      const playerName = squad?.[i] ?? `${team.name} - Jugador ${i + 1}`;
+    let playerIdx = 0;
+    for (let n = 1; n <= 20; n++) {
+      const code = `${team.code}${n}`;
+      if (n === 1) {
+        stickers.push({
+          code,
+          type: "team_logo",
+          team: team.code,
+          teamNumber: n,
+          name: `Escudo ${team.name}`,
+          premium: true,
+        });
+        continue;
+      }
+      if (n === 13) {
+        stickers.push({
+          code,
+          type: "team_photo",
+          team: team.code,
+          teamNumber: n,
+          name: `Foto grupal ${team.name}`,
+        });
+        continue;
+      }
+      const playerName =
+        squad?.[playerIdx] ?? `${team.name} - Jugador ${playerIdx + 1}`;
+      const role = ROLES_18[playerIdx];
       stickers.push({
-        number: n++,
-        code: `${team.code}-P${i + 1}`,
+        code,
         type: "player",
         team: team.code,
+        teamNumber: n,
         name: playerName,
-        role: ROLES_18[i],
-        premium: i === 17,
+        role,
+        premium: playerIdx === 17,
       });
+      playerIdx++;
     }
   }
 
-  // 961 -> 972: 12 Coca-Cola
-  for (const cc of COCA_COLA_PLAYERS) {
+  // 2) Portada / intro: "00"
+  stickers.push({
+    code: "00",
+    type: "intro",
+    name: "Portada",
+    premium: true,
+  });
+
+  // 3) FIFA World Cup specials: FWC1..FWC19
+  for (let i = 1; i <= 19; i++) {
     stickers.push({
-      number: n++,
-      code: `CC-${n}`,
-      type: "coca_cola",
-      team: cc.team,
-      name: cc.name,
-      role: "Edición Coca-Cola",
+      code: `FWC${i}`,
+      type: "fwc",
+      name: `FIFA World Cup ${i}`,
       premium: true,
     });
   }
 
-  // 973 -> 980: 8 especiales (portada/intro/copa/pelota/etc.)
-  // Sin nombre específico — el usuario los ubicará en hojas custom.
-  while (n <= 980) {
+  // 4) Coca-Cola: CC1..CC14
+  for (let i = 1; i <= 14; i++) {
+    const cc = COCA_COLA_PLAYERS[i - 1];
     stickers.push({
-      number: n,
-      code: `SP-${n}`,
-      type: "special",
-      name: `Especial #${n - 972}`,
+      code: `CC${i}`,
+      type: "coca_cola",
+      team: cc?.team,
+      name: cc?.name ?? `Coca-Cola ${i}`,
+      role: "Edición Coca-Cola",
       premium: true,
     });
-    n++;
   }
 
   return stickers;
@@ -287,8 +313,8 @@ export function buildAlbum(): Sticker[] {
 
 export const ALBUM: Sticker[] = buildAlbum();
 
-export const ALBUM_BY_NUMBER: Record<number, Sticker> = Object.fromEntries(
-  ALBUM.map((s) => [s.number, s]),
+export const ALBUM_BY_CODE: Record<string, Sticker> = Object.fromEntries(
+  ALBUM.map((s) => [s.code, s]),
 );
 
 export function stickersOfTeam(teamCode: string): Sticker[] {
@@ -303,30 +329,38 @@ export function totalStickers(): number {
 //  CONTEXTO DE ESCANEO
 // ============================================================
 
-export type ScanContextKind = "team" | "coca_cola" | "special" | "custom" | "auto";
+export type ScanContextKind =
+  | "team"
+  | "coca_cola"
+  | "fwc"
+  | "intro"
+  | "custom"
+  | "auto";
 
 export type ScanContext = {
   kind: ScanContextKind;
   teamCode?: string;
-  /** 1 = hoja izquierda (escudo + foto grupal + 9 jugadores), 2 = hoja derecha (9 jugadores) */
+  /** 1 = hoja izquierda (escudo + 9 jugadores 1-10), 2 = hoja derecha (9 jugadores 11-20 con foto grupal en 13) */
   teamSheet?: 1 | 2;
   /** id de fila album_pages si kind === "custom" */
   customId?: string;
-  /** lista de números de la hoja custom (server-side la rellena) */
-  customNumbers?: number[];
+  /** lista de códigos de la hoja custom (server-side la rellena) */
+  customCodes?: string[];
   /** etiqueta humana de la hoja custom */
   customLabel?: string;
 };
 
 /**
  * Distribución por hoja de la página de equipo (20 cromos):
- * - Hoja 1: escudo + foto grupal + 9 jugadores (11 cromos)
- * - Hoja 2: 9 jugadores
+ * - Hoja 1: <CODE>1..<CODE>10  (escudo + 9 jugadores)
+ * - Hoja 2: <CODE>11..<CODE>20 (9 jugadores con foto grupal en <CODE>13)
  */
 export function splitTeamSheet(stickers: Sticker[], sheet: 1 | 2): Sticker[] {
-  if (stickers.length === 0) return stickers;
-  if (sheet === 1) return stickers.slice(0, 11);
-  return stickers.slice(11);
+  return stickers.filter((s) => {
+    const n = s.teamNumber;
+    if (!n) return false;
+    return sheet === 1 ? n >= 1 && n <= 10 : n >= 11 && n <= 20;
+  });
 }
 
 export function stickersForContext(ctx: ScanContext): Sticker[] {
@@ -339,11 +373,13 @@ export function stickersForContext(ctx: ScanContext): Sticker[] {
     }
     case "coca_cola":
       return ALBUM.filter((s) => s.type === "coca_cola");
-    case "special":
-      return ALBUM.filter((s) => s.type === "special");
+    case "fwc":
+      return ALBUM.filter((s) => s.type === "fwc");
+    case "intro":
+      return ALBUM.filter((s) => s.type === "intro");
     case "custom":
-      return (ctx.customNumbers ?? [])
-        .map((n) => ALBUM_BY_NUMBER[n])
+      return (ctx.customCodes ?? [])
+        .map((c) => ALBUM_BY_CODE[c])
         .filter(Boolean);
     case "auto":
     default:
@@ -358,14 +394,17 @@ export function describeContext(ctx: ScanContext): string {
       if (!team) return "Equipo desconocido";
       const base = `${team.flag} ${team.name}`;
       if (ctx.teamSheet === 1)
-        return `${base} · hoja 1 (escudo + foto grupal + 1ª mitad)`;
-      if (ctx.teamSheet === 2) return `${base} · hoja 2 (2ª mitad)`;
+        return `${base} · hoja 1 (escudo + 9 jugadores · ${ctx.teamCode}1–${ctx.teamCode}10)`;
+      if (ctx.teamSheet === 2)
+        return `${base} · hoja 2 (foto grupal + 9 jugadores · ${ctx.teamCode}11–${ctx.teamCode}20)`;
       return base;
     }
     case "coca_cola":
-      return "Sección: Especiales Coca-Cola (12)";
-    case "special":
-      return "Sección: Especiales / Portada / Misceláneos (8)";
+      return "Sección: Coca-Cola (CC1–CC14)";
+    case "fwc":
+      return "Sección: FIFA World Cup (FWC1–FWC19)";
+    case "intro":
+      return "Portada (00)";
     case "custom":
       return ctx.customLabel
         ? `Hoja custom: ${ctx.customLabel}`
@@ -374,4 +413,40 @@ export function describeContext(ctx: ScanContext): string {
     default:
       return "Auto-detectar (toda página)";
   }
+}
+
+/** Helpers para parseo / validación de códigos */
+const TEAM_CODES = new Set(TEAMS.map((t) => t.code));
+
+export function parseStickerCode(input: string): {
+  code: string;
+  team?: string;
+  teamNumber?: number;
+} | null {
+  const cleaned = input.trim().toUpperCase();
+  if (!cleaned) return null;
+  if (cleaned === "00") return { code: "00" };
+  const fwc = cleaned.match(/^FWC(\d{1,2})$/);
+  if (fwc) {
+    const n = Number(fwc[1]);
+    if (n >= 1 && n <= 19) return { code: `FWC${n}` };
+  }
+  const cc = cleaned.match(/^CC(\d{1,2})$/);
+  if (cc) {
+    const n = Number(cc[1]);
+    if (n >= 1 && n <= 14) return { code: `CC${n}` };
+  }
+  const team = cleaned.match(/^([A-Z]{2,3})(\d{1,2})$/);
+  if (team) {
+    const t = team[1];
+    const n = Number(team[2]);
+    if (TEAM_CODES.has(t) && n >= 1 && n <= 20) {
+      return { code: `${t}${n}`, team: t, teamNumber: n };
+    }
+  }
+  return null;
+}
+
+export function isValidCode(code: string): boolean {
+  return !!ALBUM_BY_CODE[code];
 }

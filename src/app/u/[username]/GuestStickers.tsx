@@ -6,7 +6,7 @@ import { Search, Check } from "lucide-react";
 import clsx from "clsx";
 
 type Props = {
-  ownerCollection: Record<number, number>;
+  ownerCollection: Record<string, number>;
   ownerName: string;
 };
 
@@ -18,7 +18,7 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
 
   const visible = useMemo(() => {
     return ALBUM.filter((s) => {
-      const c = ownerCollection[s.number] ?? 0;
+      const c = ownerCollection[s.code] ?? 0;
       if (filter === "owned" && c === 0) return false;
       if (filter === "useful" && c <= 0) return false;
       if (filter === "dups" && c < 2) return false;
@@ -26,7 +26,7 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
         const ql = q.toLowerCase();
         if (
           !s.name.toLowerCase().includes(ql) &&
-          !String(s.number).includes(ql) &&
+          !s.code.toLowerCase().includes(ql) &&
           !(s.team ?? "").toLowerCase().includes(ql)
         )
           return false;
@@ -75,16 +75,16 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
 
       <div className="grid grid-cols-3 gap-2 mt-2">
         {visible.slice(0, 60).map((s) => {
-          const c = ownerCollection[s.number] ?? 0;
+          const c = ownerCollection[s.code] ?? 0;
           return (
             <div
-              key={s.number}
+              key={s.code}
               className={clsx(
                 "sticker",
                 c === 0 ? "missing" : c === 1 ? "owned" : "duplicate",
               )}
             >
-              <span className="sticker-num">{s.number}</span>
+              <span className="sticker-num">{s.code}</span>
               <span className="sticker-name">{s.name}</span>
               {c > 1 && (
                 <span className="absolute -top-2 -right-2 bg-[color:var(--accent)] text-white text-[10px] font-bold rounded-full w-6 h-6 flex items-center justify-center shadow">

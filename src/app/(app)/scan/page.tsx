@@ -6,7 +6,6 @@ import { createClient } from "@/lib/supabase/client";
 import { useCollection } from "@/lib/store";
 import {
   Camera,
-  Upload,
   Loader2,
   Check,
   X,
@@ -17,7 +16,7 @@ import {
   Library,
 } from "lucide-react";
 import {
-  ALBUM_BY_NUMBER,
+  ALBUM_BY_CODE,
   describeContext,
   stickersForContext,
   type ScanContext,
@@ -34,7 +33,7 @@ type Job = {
   previewUrl: string;
   status: JobStatus;
   error?: string;
-  detected?: number[];
+  detected?: string[];
   contextDescription?: string;
   candidatesCount?: number;
   durationMs?: number;
@@ -44,10 +43,12 @@ type Job = {
   autoIdentified?: { kind: string; teamCode?: string; teamSheet?: number; reason?: string } | null;
 };
 
+const POOL_SIZE = 3;
+
 export default function ScanPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [running, setRunning] = useState(false);
-  const [ctxKind, setCtxKind] = useState<ScanContext["kind"]>("team");
+  const [ctxKind, setCtxKind] = useState<ScanContext["kind"]>("auto");
   const [teamCode, setTeamCode] = useState<string>("ARG");
   const [teamSheet, setTeamSheet] = useState<1 | 2>(1);
   const [customId, setCustomId] = useState<string>("");
@@ -85,7 +86,7 @@ export default function ScanPage() {
       return {
         kind: "custom",
         customId,
-        customNumbers: page?.sticker_numbers ?? [],
+        customCodes: page?.sticker_codes ?? [],
         customLabel: page?.custom_label ?? undefined,
       };
     }
@@ -93,6 +94,13 @@ export default function ScanPage() {
   }, [ctxKind, teamCode, teamSheet, customId, customPages]);
 
   const candidates = useMemo(() => stickersForContext(ctx), [ctx]);
+
+  // Mantenemos una ref del ctx actual para que cada job al ser claimeado tome
+  // el contexto vigente (por si el user cambió el dropdown durante el proceso).
+  const ctxRef = useRef<ScanContext>(ctx);
+  useEffect(() => {
+    ctxRef.current = ctx;
+  }, [ctx]);
 
   function addFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -103,6 +111,27 @@ export default function ScanPage() {
       status: "queued",
     }));
     setJobs((prev) => [...prev, ...newJobs]);
+  }
+
+  /** Reclama atómicamente el siguiente job en cola y lo marca uploading. */
+  function claimNextJob(): Promise<{
+    id: string;
+    file: File;
+    ctxSnapshot: ScanContext;
+  } | null> {
+    return new Promise((resolve) => {
+      setJobs((prev) => {
+        const j = prev.find((x) => x.status === "queued");
+        if (!j) {
+          resolve(null);
+          return prev;
+        }
+        resolve({ id: j.id, file: j.file, ctxSnapshot: ctxRef.current });
+        return prev.map((x) =>
+          x.id === j.id ? { ...x, status: "uploading" } : x,
+        );
+      });
+    });
   }
 
   async function processQueue() {
@@ -124,17 +153,20 @@ export default function ScanPage() {
         return;
       }
 
-      while (true) {
-        const next = await new Promise<Job | null>((resolve) => {
-          setJobs((prev) => {
-            const j = prev.find((x) => x.status === "queued");
-            resolve(j ?? null);
-            return prev;
-          });
-        });
-        if (!next) break;
-        await processJob(next.id, ctx, supabase, user.id);
-      }
+      const workers = Array.from({ length: POOL_SIZE }, async () => {
+        while (true) {
+          const claimed = await claimNextJob();
+          if (!claimed) break;
+          await processJob(
+            claimed.id,
+            claimed.file,
+            claimed.ctxSnapshot,
+            supabase,
+            user.id,
+          );
+        }
+      });
+      await Promise.all(workers);
     } finally {
       setRunning(false);
     }
@@ -142,20 +174,12 @@ export default function ScanPage() {
 
   async function processJob(
     jobId: string,
+    file: File,
     snapshotCtx: ScanContext,
     supabase: ReturnType<typeof createClient>,
     userId: string,
   ) {
-    setJobs((prev) =>
-      prev.map((j) => (j.id === jobId ? { ...j, status: "uploading" } : j)),
-    );
-    const job = await new Promise<Job | undefined>((res) =>
-      setJobs((prev) => {
-        res(prev.find((j) => j.id === jobId));
-        return prev;
-      }),
-    );
-    if (!job) return;
+    const job = { id: jobId, file };
 
     let toUpload: File;
     try {
@@ -233,12 +257,14 @@ export default function ScanPage() {
       const json = (await res.json()) as
         | {
             reqId: string;
-            detected: number[];
+            detected: string[];
             contextDescription: string;
             candidatesCount: number;
             durationMs: number;
             raw: string;
             usedReference: boolean;
+            referencesCount?: number;
+            detectedSheet?: 1 | 2;
             autoIdentified?: {
               kind: string;
               teamCode?: string;
@@ -293,14 +319,20 @@ export default function ScanPage() {
   }
 
   const queuedCount = jobs.filter((j) => j.status === "queued").length;
+  const inProgressCount = jobs.filter(
+    (j) => j.status === "uploading" || j.status === "scanning",
+  ).length;
+  const doneCount = jobs.filter((j) => j.status === "done").length;
+  const errorCount = jobs.filter((j) => j.status === "error").length;
+  const totalProcessable = jobs.filter((j) => j.status !== "queued").length;
   const allDetected = useMemo(() => {
-    const set = new Set<number>();
+    const set = new Set<string>();
     for (const j of jobs) {
       if (j.status === "done" && j.detected) {
-        for (const n of j.detected) set.add(n);
+        for (const c of j.detected) set.add(c);
       }
     }
-    return Array.from(set).sort((a, b) => a - b);
+    return Array.from(set).sort();
   }, [jobs]);
 
   async function applyAll() {
@@ -312,6 +344,14 @@ export default function ScanPage() {
     setJobs([]);
   }
 
+  // Auto-arranca el procesamiento apenas hay fotos en cola
+  useEffect(() => {
+    if (queuedCount > 0 && !running) {
+      processQueue();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queuedCount, running]);
+
   return (
     <div className="max-w-md mx-auto px-4 pt-6 pb-32">
       <header className="flex items-center justify-between gap-2">
@@ -320,7 +360,7 @@ export default function ScanPage() {
             <Camera className="w-6 h-6" /> Escanear álbum
           </h1>
           <p className="text-sm text-[color:var(--muted)] mt-1">
-            Subí fotos de tus páginas. Las procesa con IA, una por una.
+            Subí todas las fotos juntas. La IA identifica cada página sola.
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
@@ -342,35 +382,50 @@ export default function ScanPage() {
       </header>
 
       <div className="card mt-4 !p-4">
-        <h2 className="font-semibold text-sm mb-2">
-          ¿Qué página estás escaneando?
-        </h2>
-        <p className="text-xs text-[color:var(--muted)] mb-3">
-          La IA solo busca entre los números de la página elegida. Si subís
-          varias fotos de equipos distintos, hacelo de a tandas.
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="font-semibold text-sm">
+            {ctxKind === "auto"
+              ? "Modo automático"
+              : "Forzar página manualmente"}
+          </h2>
+          <button
+            onClick={() =>
+              setCtxKind(ctxKind === "auto" ? "team" : "auto")
+            }
+            className="text-[11px] text-[color:var(--primary)] underline"
+          >
+            {ctxKind === "auto" ? "Forzar manual" : "Volver a Auto"}
+          </button>
+        </div>
+        <p className="text-xs text-[color:var(--muted)] mt-1 mb-3">
+          {ctxKind === "auto"
+            ? "Subí cualquier foto: la IA detecta sola qué página es y qué figuritas hay pegadas."
+            : "Elegí qué página estás escaneando. Útil cuando la IA falla en identificar."}
         </p>
 
-        <div className="grid grid-cols-2 gap-2 mb-3">
-          {[
-            { v: "team", label: "Selección" },
-            { v: "coca_cola", label: "Coca-Cola" },
-            { v: "special", label: "Especiales" },
-            { v: "custom", label: "Hoja custom" },
-            { v: "auto", label: "Auto" },
-          ].map((opt) => (
-            <button
-              key={opt.v}
-              onClick={() => setCtxKind(opt.v as ScanContext["kind"])}
-              className={`text-xs px-3 py-2 rounded-lg border transition ${
-                ctxKind === opt.v
-                  ? "bg-[color:var(--primary)] border-[color:var(--primary)] text-black font-bold"
-                  : "border-[color:var(--card-border)] text-[color:var(--fg)]"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
+        {ctxKind !== "auto" && (
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            {[
+              { v: "team", label: "Selección" },
+              { v: "coca_cola", label: "Coca-Cola" },
+              { v: "fwc", label: "FWC specials" },
+              { v: "intro", label: "Portada (00)" },
+              { v: "custom", label: "Hoja custom" },
+            ].map((opt) => (
+              <button
+                key={opt.v}
+                onClick={() => setCtxKind(opt.v as ScanContext["kind"])}
+                className={`text-xs px-3 py-2 rounded-lg border transition ${
+                  ctxKind === opt.v
+                    ? "bg-[color:var(--primary)] border-[color:var(--primary)] text-black font-bold"
+                    : "border-[color:var(--card-border)] text-[color:var(--fg)]"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {ctxKind === "team" && (
           <div className="space-y-2">
@@ -397,8 +452,8 @@ export default function ScanPage() {
                   }`}
                 >
                   {sheet === 1
-                    ? "Hoja 1 (escudo + foto + 9)"
-                    : "Hoja 2 (9 jugadores)"}
+                    ? `Hoja 1 (${teamCode}1–${teamCode}10)`
+                    : `Hoja 2 (${teamCode}11–${teamCode}20)`}
                 </button>
               ))}
             </div>
@@ -425,7 +480,7 @@ export default function ScanPage() {
               {customPages.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.custom_label ?? "Hoja sin nombre"} ·{" "}
-                  {p.sticker_numbers.length} cromos
+                  {p.sticker_codes.length} cromos
                 </option>
               ))}
             </select>
@@ -435,7 +490,7 @@ export default function ScanPage() {
           {describeContext(ctx)} · {candidates.length} figuritas posibles
           {candidates.length > 0 &&
             ctxKind !== "auto" &&
-            ` (#${candidates[0].number}–#${candidates[candidates.length - 1].number})`}
+            ` (${candidates[0].code}–${candidates[candidates.length - 1].code})`}
         </p>
       </div>
 
@@ -487,34 +542,34 @@ export default function ScanPage() {
       {jobs.length > 0 && (
         <div className="mt-4">
           <div className="flex items-center justify-between gap-2 mb-2">
-            <p className="text-sm font-semibold">
-              {jobs.length} foto{jobs.length === 1 ? "" : "s"}
-              {queuedCount > 0 && ` · ${queuedCount} en cola`}
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setJobs([])}
-                disabled={running}
-                className="text-xs text-[color:var(--muted)] disabled:opacity-50"
-              >
-                Limpiar
-              </button>
-              <button
-                onClick={processQueue}
-                disabled={running || queuedCount === 0}
-                className="btn btn-primary text-xs !px-3 !py-1.5 disabled:opacity-50"
-              >
-                {running ? (
-                  <>
-                    <Loader2 className="w-3 h-3 animate-spin" /> Procesando
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-3 h-3" /> Procesar {queuedCount}
-                  </>
-                )}
-              </button>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold flex items-center gap-2">
+                {running && <Loader2 className="w-4 h-4 animate-spin" />}
+                {totalProcessable} de {jobs.length} procesadas
+              </p>
+              <p className="text-[11px] text-[color:var(--muted)]">
+                {queuedCount > 0 && `${queuedCount} en cola · `}
+                {inProgressCount > 0 && `${inProgressCount} en proceso · `}
+                {doneCount} OK
+                {errorCount > 0 && ` · ${errorCount} error`}
+              </p>
             </div>
+            <button
+              onClick={() => setJobs([])}
+              disabled={running}
+              className="text-xs text-[color:var(--muted)] disabled:opacity-50"
+            >
+              Limpiar
+            </button>
+          </div>
+
+          <div className="h-1.5 bg-[color:var(--card-border)] rounded-full overflow-hidden mb-3">
+            <div
+              className="h-full bg-[color:var(--primary)] transition-all"
+              style={{
+                width: `${jobs.length === 0 ? 0 : (totalProcessable / jobs.length) * 100}%`,
+              }}
+            />
           </div>
 
           <ul className="space-y-3">
@@ -636,7 +691,7 @@ function JobCard({
                   {job.detected!
                     .slice(0, 8)
                     .map(
-                      (n) => `#${n} ${ALBUM_BY_NUMBER[n]?.name ?? ""}`.trim(),
+                      (c) => `${c} ${ALBUM_BY_CODE[c]?.name ?? ""}`.trim(),
                     )
                     .join(" · ")}
                   {(job.detected?.length ?? 0) > 8

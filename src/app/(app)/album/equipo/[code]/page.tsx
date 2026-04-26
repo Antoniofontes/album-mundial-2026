@@ -20,9 +20,9 @@ export default function TeamPage() {
     () => (team ? stickersOfTeam(team.code) : []),
     [team],
   );
-  const owned = stickers.filter((s) => (collection[s.number] ?? 0) > 0).length;
+  const owned = stickers.filter((s) => (collection[s.code] ?? 0) > 0).length;
   const dups = stickers.reduce(
-    (acc, s) => acc + Math.max(0, (collection[s.number] ?? 0) - 1),
+    (acc, s) => acc + Math.max(0, (collection[s.code] ?? 0) - 1),
     0,
   );
 
@@ -64,10 +64,10 @@ export default function TeamPage() {
       <div className="grid grid-cols-3 gap-2 mt-5">
         {stickers.map((s) => (
           <StickerCell
-            key={s.number}
+            key={s.code}
             sticker={s}
-            count={collection[s.number] ?? 0}
-            onChange={(c) => setCount(s.number, c)}
+            count={collection[s.code] ?? 0}
+            onChange={(c) => setCount(s.code, c)}
           />
         ))}
       </div>

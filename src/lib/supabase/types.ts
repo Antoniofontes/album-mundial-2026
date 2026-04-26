@@ -10,7 +10,7 @@ export type Profile = {
 
 export type CollectionRow = {
   user_id: string;
-  sticker_number: number;
+  sticker_code: string;
   count: number;
   updated_at: string;
 };
@@ -27,7 +27,7 @@ export type MarkedFriend = {
 export type Holding = {
   id: string;
   owner_id: string;
-  sticker_number: number;
+  sticker_code: string;
   marked_friend_id: string | null;
   friend_user_id: string | null;
   count: number;
@@ -38,14 +38,14 @@ export type Scan = {
   id: string;
   user_id: string;
   storage_path: string;
-  detected_numbers: number[];
+  detected_codes: string[];
   status: "pending" | "processing" | "done" | "error";
   error: string | null;
   applied: boolean;
   created_at: string;
 };
 
-export type AlbumPageKind = "team" | "coca_cola" | "special" | "custom";
+export type AlbumPageKind = "team" | "coca_cola" | "fwc" | "intro" | "custom";
 
 export type AlbumPage = {
   id: string;
@@ -55,7 +55,7 @@ export type AlbumPage = {
   team_sheet: number | null;
   custom_label: string | null;
   storage_path: string;
-  sticker_numbers: number[];
+  sticker_codes: string[];
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -90,7 +90,7 @@ export type Database = {
       >;
       collection: TableShape<
         CollectionRow,
-        Pick<CollectionRow, "user_id" | "sticker_number" | "count">,
+        Pick<CollectionRow, "user_id" | "sticker_code" | "count">,
         Partial<CollectionRow>
       >;
       marked_friends: TableShape<
@@ -100,7 +100,7 @@ export type Database = {
       >;
       holdings: TableShape<
         Holding,
-        Partial<Holding> & Pick<Holding, "owner_id" | "sticker_number">,
+        Partial<Holding> & Pick<Holding, "owner_id" | "sticker_code">,
         Partial<Holding>
       >;
       scans: TableShape<
@@ -111,7 +111,7 @@ export type Database = {
       album_pages: TableShape<
         AlbumPage,
         Partial<AlbumPage> &
-          Pick<AlbumPage, "kind" | "storage_path" | "sticker_numbers">,
+          Pick<AlbumPage, "kind" | "storage_path" | "sticker_codes">,
         Partial<AlbumPage>
       >;
     };

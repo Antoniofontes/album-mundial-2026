@@ -41,28 +41,29 @@ function AsignarInner() {
   }, [initialFriend]);
 
   const friendHas = useMemo(() => {
-    const set = new Set<number>();
+    const set = new Set<string>();
     if (!friendId) return set;
-    for (const h of holdings) if (h.marked_friend_id === friendId) set.add(h.sticker_number);
+    for (const h of holdings)
+      if (h.marked_friend_id === friendId) set.add(h.sticker_code);
     return set;
   }, [holdings, friendId]);
 
   const visible = useMemo(() => {
     let list: Sticker[] = team ? stickersOfTeam(team) : ALBUM;
-    if (onlyMissing) list = list.filter((s) => (collection[s.number] ?? 0) === 0);
+    if (onlyMissing) list = list.filter((s) => (collection[s.code] ?? 0) === 0);
     if (q) {
       const ql = q.toLowerCase();
       list = list.filter(
         (s) =>
           s.name.toLowerCase().includes(ql) ||
-          String(s.number).includes(ql) ||
+          s.code.toLowerCase().includes(ql) ||
           (s.team ?? "").toLowerCase().includes(ql),
       );
     }
     return list;
   }, [team, q, onlyMissing, collection]);
 
-  async function toggle(stickerNumber: number) {
+  async function toggle(stickerCode: string) {
     if (!friendId) {
       alert("Primero agregá o elegí un amigo desde Comunidad.");
       return;
@@ -73,16 +74,17 @@ function AsignarInner() {
     } = await supabase.auth.getUser();
     if (!user) return;
 
-    if (friendHas.has(stickerNumber)) {
+    if (friendHas.has(stickerCode)) {
       await supabase
         .from("holdings")
         .delete()
         .eq("owner_id", user.id)
         .eq("marked_friend_id", friendId)
-        .eq("sticker_number", stickerNumber);
+        .eq("sticker_code", stickerCode);
       setHoldings((prev) =>
         prev.filter(
-          (h) => !(h.marked_friend_id === friendId && h.sticker_number === stickerNumber),
+          (h) =>
+            !(h.marked_friend_id === friendId && h.sticker_code === stickerCode),
         ),
       );
     } else {
@@ -91,7 +93,7 @@ function AsignarInner() {
         .insert({
           owner_id: user.id,
           marked_friend_id: friendId,
-          sticker_number: stickerNumber,
+          sticker_code: stickerCode,
           count: 1,
         })
         .select()
@@ -162,16 +164,16 @@ function AsignarInner() {
 
       <div className="grid grid-cols-3 gap-2 mt-3">
         {visible.map((s) => {
-          const has = friendHas.has(s.number);
-          const c = collection[s.number] ?? 0;
+          const has = friendHas.has(s.code);
+          const c = collection[s.code] ?? 0;
           return (
             <button
-              key={s.number}
+              key={s.code}
               type="button"
-              onClick={() => toggle(s.number)}
+              onClick={() => toggle(s.code)}
               className={clsx("sticker", has ? "duplicate" : c > 0 ? "owned" : "missing")}
             >
-              <span className="sticker-num">{s.number}</span>
+              <span className="sticker-num">{s.code}</span>
               <span className="sticker-name">{s.name}</span>
               {has && (
                 <span className="absolute -top-2 -right-2 bg-white text-[color:var(--gold)] rounded-full w-6 h-6 flex items-center justify-center shadow">
