@@ -24,6 +24,7 @@ import {
 } from "@/lib/album";
 import { TEAMS } from "@/lib/teams";
 import type { AlbumPage } from "@/lib/supabase/types";
+import { compressForUpload } from "@/lib/compressImage";
 
 type JobStatus = "queued" | "uploading" | "scanning" | "done" | "error";
 
@@ -155,12 +156,32 @@ export default function ScanPage() {
     );
     if (!job) return;
 
-    const ext = job.file.name.split(".").pop() || "jpg";
-    const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+    let toUpload: File;
+    try {
+      const r = await compressForUpload(job.file, { maxSide: 1920, quality: 0.85 });
+      toUpload = r.file;
+    } catch (e) {
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                status: "error",
+                error:
+                  "No pude leer la imagen: " +
+                  (e instanceof Error ? e.message : "error"),
+              }
+            : j,
+        ),
+      );
+      return;
+    }
+
+    const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
     const { error: upErr } = await supabase.storage
       .from("album-scans")
-      .upload(path, job.file, {
-        contentType: job.file.type || "image/jpeg",
+      .upload(path, toUpload, {
+        contentType: "image/jpeg",
         upsert: false,
       });
     if (upErr) {

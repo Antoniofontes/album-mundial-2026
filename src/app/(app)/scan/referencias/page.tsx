@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { ALBUM, stickersForContext, describeContext } from "@/lib/album";
 import type { AlbumPage, AlbumPageKind } from "@/lib/supabase/types";
+import { compressForUpload } from "@/lib/compressImage";
 
 type Slot = {
   id: string;
@@ -150,9 +151,21 @@ export default function ReferenciasPage() {
         return;
       }
 
-      const ext = file.name.split(".").pop() || "jpg";
+      let toUpload: File;
+      try {
+        const r = await compressForUpload(file, { maxSide: 1920, quality: 0.85 });
+        toUpload = r.file;
+      } catch (e) {
+        setError(
+          "No pude leer la imagen: " +
+            (e instanceof Error ? e.message : "error"),
+        );
+        setBusy(null);
+        return;
+      }
+
       const sheetSuffix = slot.teamSheet ? `-h${slot.teamSheet}` : "";
-      const path = `${slot.kind}-${slot.teamCode ?? "all"}${sheetSuffix}-${Date.now()}.${ext}`;
+      const path = `${slot.kind}-${slot.teamCode ?? "all"}${sheetSuffix}-${Date.now()}.jpg`;
 
       if (slot.existing) {
         await supabase.storage
@@ -162,8 +175,8 @@ export default function ReferenciasPage() {
 
       const { error: upErr } = await supabase.storage
         .from("album-pages")
-        .upload(path, file, {
-          contentType: file.type || "image/jpeg",
+        .upload(path, toUpload, {
+          contentType: "image/jpeg",
           upsert: true,
         });
       if (upErr) {
@@ -527,12 +540,23 @@ function CustomPageModal({
         return;
       }
 
-      const ext = file.name.split(".").pop() || "jpg";
-      const path = `custom-${Date.now()}.${ext}`;
+      let toUpload: File;
+      try {
+        const r = await compressForUpload(file, { maxSide: 1920, quality: 0.85 });
+        toUpload = r.file;
+      } catch (e) {
+        setErr(
+          "No pude leer la imagen: " +
+            (e instanceof Error ? e.message : "error"),
+        );
+        return;
+      }
+
+      const path = `custom-${Date.now()}.jpg`;
       const { error: upErr } = await supabase.storage
         .from("album-pages")
-        .upload(path, file, {
-          contentType: file.type || "image/jpeg",
+        .upload(path, toUpload, {
+          contentType: "image/jpeg",
           upsert: false,
         });
       if (upErr) {
