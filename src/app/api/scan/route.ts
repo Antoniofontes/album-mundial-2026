@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import sharp from "sharp";
 import { createClient } from "@/lib/supabase/server";
 import {
   stickersForContext,
@@ -11,6 +12,10 @@ import type { AlbumPage } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+// Claude permite hasta 5MB en base64. Apuntamos a ~3.5MB con margen de seguridad.
+const TARGET_BASE64_BYTES = 3.5 * 1024 * 1024;
+const MAX_SIDE_PX = 1568;
 
 type ScanRequestBody = {
   scanId: string;
@@ -51,11 +56,12 @@ export async function POST(req: Request) {
     }
     log("user", user.id);
 
-    // 1) Imagen del usuario
-    const userImage = await downloadAsBase64(
+    // 1) Imagen del usuario (descarga + compresión para Claude)
+    const userImage = await downloadAndCompress(
       supabase,
       "album-scans",
       storagePath,
+      log,
     );
     if (!userImage.ok) {
       errLog("user image download error", userImage.error);
@@ -67,19 +73,13 @@ export async function POST(req: Request) {
         { status: 500 },
       );
     }
-    log("user image", { sizeKb: userImage.sizeKb, mediaType: userImage.mediaType });
-
-    if (userImage.bytes > 5 * 1024 * 1024) {
-      errLog("image too large", userImage.sizeKb);
-      return NextResponse.json(
-        {
-          error:
-            "La foto pesa demasiado (>5MB). Bajá la resolución antes de subirla.",
-          reqId,
-        },
-        { status: 400 },
-      );
-    }
+    log("user image", {
+      original_kb: userImage.originalKb,
+      compressed_kb: userImage.compressedKb,
+      compressed_mediaType: userImage.mediaType,
+      compressed_quality: userImage.quality,
+      compressed_resized_to: userImage.resizedTo,
+    });
 
     // 2) Imagen de referencia (álbum vacío) si existe para este contexto
     let reference: { b64: string; mediaType: SupportedMedia } | null = null;
@@ -119,16 +119,18 @@ export async function POST(req: Request) {
       }
 
       if (refRow) {
-        const refImg = await downloadAsBase64(
+        const refImg = await downloadAndCompress(
           supabase,
           "album-pages",
           refRow.storage_path,
+          log,
         );
         if (refImg.ok) {
           reference = { b64: refImg.b64, mediaType: refImg.mediaType };
           log("using reference page", {
             id: refRow.id,
-            sizeKb: refImg.sizeKb,
+            original_kb: refImg.originalKb,
+            compressed_kb: refImg.compressedKb,
             kind: refRow.kind,
           });
         } else {
@@ -270,17 +272,20 @@ export async function POST(req: Request) {
   }
 }
 
-async function downloadAsBase64(
+async function downloadAndCompress(
   supabase: Awaited<ReturnType<typeof createClient>>,
   bucket: string,
   path: string,
+  log: (...args: unknown[]) => void,
 ): Promise<
   | {
       ok: true;
       b64: string;
       mediaType: SupportedMedia;
-      bytes: number;
-      sizeKb: number;
+      originalKb: number;
+      compressedKb: number;
+      quality: number;
+      resizedTo: { width: number; height: number };
     }
   | { ok: false; error: string }
 > {
@@ -288,18 +293,74 @@ async function downloadAsBase64(
   if (error || !data) {
     return { ok: false, error: error?.message ?? "no data" };
   }
-  const buf = Buffer.from(await data.arrayBuffer());
-  let mediaType: SupportedMedia = "image/jpeg";
-  if (data.type === "image/png") mediaType = "image/png";
-  else if (data.type === "image/webp") mediaType = "image/webp";
-  else if (data.type === "image/gif") mediaType = "image/gif";
-  return {
-    ok: true,
-    b64: buf.toString("base64"),
-    mediaType,
-    bytes: buf.length,
-    sizeKb: Math.round(buf.length / 1024),
-  };
+  const original = Buffer.from(await data.arrayBuffer());
+  const originalKb = Math.round(original.length / 1024);
+
+  try {
+    let pipeline = sharp(original, { failOn: "none" }).rotate(); // honra EXIF
+    const meta = await pipeline.metadata();
+    const w = meta.width ?? 0;
+    const h = meta.height ?? 0;
+    const maxSide = Math.max(w, h);
+    let targetSide = MAX_SIDE_PX;
+
+    let quality = 85;
+    let out: Buffer | null = null;
+    let lastWH = { width: w, height: h };
+
+    // Bajamos quality y, si todavía no alcanza, bajamos también la resolución.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      let p = sharp(original, { failOn: "none" }).rotate();
+      if (maxSide > targetSide) {
+        p = p.resize({
+          width: targetSide,
+          height: targetSide,
+          fit: "inside",
+        });
+      }
+      const buf = await p.jpeg({ quality, mozjpeg: true }).toBuffer();
+      const finalMeta = await sharp(buf).metadata();
+      lastWH = { width: finalMeta.width ?? 0, height: finalMeta.height ?? 0 };
+      const base64Bytes = Math.ceil((buf.length * 4) / 3);
+      log("compress attempt", {
+        attempt,
+        targetSide,
+        quality,
+        out_kb: Math.round(buf.length / 1024),
+        base64_kb: Math.round(base64Bytes / 1024),
+      });
+      if (base64Bytes <= TARGET_BASE64_BYTES) {
+        out = buf;
+        break;
+      }
+      if (quality > 55) {
+        quality -= 10;
+      } else if (targetSide > 768) {
+        targetSide = Math.round(targetSide * 0.8);
+        quality = 80;
+      } else {
+        out = buf; // último recurso
+        break;
+      }
+    }
+
+    if (!out) {
+      return { ok: false, error: "no pude comprimir la imagen lo suficiente" };
+    }
+
+    return {
+      ok: true,
+      b64: out.toString("base64"),
+      mediaType: "image/jpeg",
+      originalKb,
+      compressedKb: Math.round(out.length / 1024),
+      quality,
+      resizedTo: lastWH,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "compress failed";
+    return { ok: false, error: `compress: ${msg}` };
+  }
 }
 
 function buildPrompt(
