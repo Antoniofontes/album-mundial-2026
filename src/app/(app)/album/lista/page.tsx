@@ -1,11 +1,48 @@
 "use client";
 
 import { ALBUM } from "@/lib/album";
+import { TEAM_BY_CODE } from "@/lib/teams";
 import { useCollection } from "@/lib/store";
 import { StickerCell } from "@/components/StickerCell";
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Search, Share2, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+
+function buildWhatsAppList(collection: Record<string, number>): string {
+  const missing = ALBUM.filter((s) => (collection[s.code] ?? 0) === 0);
+  if (missing.length === 0) return "¡Tengo el álbum completo! 🏆";
+
+  const lines: string[] = [];
+  lines.push(`📋 *Mis faltantes - Mundial 2026*`);
+  lines.push(`_(${missing.length} de ${ALBUM.length})_`);
+
+  const specials = missing.filter(
+    (s) => s.type === "intro" || s.type === "fwc" || s.type === "coca_cola",
+  );
+  if (specials.length > 0) {
+    lines.push("");
+    lines.push(`*⭐ Especiales:* ${specials.map((s) => s.code).join(", ")}`);
+  }
+
+  const teamCodes = [
+    ...new Set(
+      missing
+        .filter((s) => s.team && s.type !== "coca_cola")
+        .map((s) => s.team!),
+    ),
+  ];
+  for (const teamCode of teamCodes) {
+    const team = TEAM_BY_CODE[teamCode];
+    if (!team) continue;
+    const codes = missing
+      .filter((s) => s.team === teamCode && s.type !== "coca_cola")
+      .map((s) => s.code)
+      .join(", ");
+    lines.push(`*${team.flag} ${team.name}:* ${codes}`);
+  }
+
+  return lines.join("\n");
+}
 
 export default function ListaPage() {
   const router = useRouter();
@@ -13,6 +50,27 @@ export default function ListaPage() {
   const setCount = useCollection((s) => s.setCount);
   const [filter, setFilter] = useState<"all" | "owned" | "missing" | "dups">("all");
   const [q, setQ] = useState("");
+  const [shareState, setShareState] = useState<"idle" | "copied" | "shared">("idle");
+
+  const missingCount = useMemo(
+    () => ALBUM.filter((s) => (collection[s.code] ?? 0) === 0).length,
+    [collection],
+  );
+
+  async function shareWhatsApp() {
+    const text = buildWhatsAppList(collection);
+    if (navigator.share) {
+      try {
+        await navigator.share({ text });
+        setShareState("shared");
+        setTimeout(() => setShareState("idle"), 2000);
+      } catch {}
+    } else {
+      await navigator.clipboard.writeText(text);
+      setShareState("copied");
+      setTimeout(() => setShareState("idle"), 2000);
+    }
+  }
 
   const filtered = useMemo(() => {
     return ALBUM.filter((s) => {
@@ -73,6 +131,33 @@ export default function ListaPage() {
           </button>
         ))}
       </div>
+
+      {missingCount > 0 && (
+        <button
+          onClick={shareWhatsApp}
+          className="btn btn-secondary w-full mt-3 gap-2"
+        >
+          {shareState === "copied" ? (
+            <>
+              <Check className="w-4 h-4 text-green-500" />
+              ¡Copiado! Pegá en WhatsApp
+            </>
+          ) : shareState === "shared" ? (
+            <>
+              <Check className="w-4 h-4 text-green-500" />
+              ¡Compartido!
+            </>
+          ) : (
+            <>
+              <Share2 className="w-4 h-4" />
+              Compartir faltantes por WhatsApp
+              <span className="ml-auto text-[color:var(--muted)] text-xs">
+                {missingCount}
+              </span>
+            </>
+          )}
+        </button>
+      )}
 
       <div className="text-xs text-[color:var(--muted)] mt-3">
         {filtered.length} resultados
