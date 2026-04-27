@@ -43,7 +43,7 @@ type Job = {
   autoIdentified?: { kind: string; teamCode?: string; teamSheet?: number; reason?: string } | null;
 };
 
-const POOL_SIZE = 3;
+const POOL_SIZE = 1;
 
 export default function ScanPage() {
   const [jobs, setJobs] = useState<Job[]>([]);

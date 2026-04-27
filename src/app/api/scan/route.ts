@@ -19,7 +19,11 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const TARGET_BASE64_BYTES = 3.5 * 1024 * 1024;
-const MAX_SIDE_PX = 1568;
+const MAX_SIDE_PX = 1280;
+const ID_MAX_SIDE_PX = 768;
+const DETECTION_MODEL = "claude-sonnet-4-5";
+const IDENTIFY_MODEL = "claude-haiku-4-5";
+const RETRY_MAX_ATTEMPTS = 4;
 
 type ScanRequestBody = {
   scanId: string;
@@ -85,7 +89,7 @@ export async function POST(req: Request) {
     });
 
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const model = "claude-sonnet-4-5";
+    const model = DETECTION_MODEL;
 
     let workingContext: ScanContext = context;
     let autoIdentified: {
@@ -98,8 +102,18 @@ export async function POST(req: Request) {
       log("auto-identify: calling Claude to detect page kind");
       const idStarted = Date.now();
       try {
-        const idMsg = await client.messages.create({
-          model,
+        const smallUserImage = await downloadAndCompress(
+          supabase,
+          "album-scans",
+          storagePath,
+          log,
+          ID_MAX_SIDE_PX,
+        );
+        const idImage = smallUserImage.ok ? smallUserImage : userImage;
+        const idMsg = await callWithRetry(
+          () =>
+            client.messages.create({
+          model: IDENTIFY_MODEL,
           max_tokens: 200,
           system: `Identificás qué página del álbum Panini "FIFA World Cup 2026" muestra una foto.
 
@@ -131,8 +145,8 @@ Reglas:
                   type: "image",
                   source: {
                     type: "base64",
-                    media_type: userImage.mediaType,
-                    data: userImage.b64,
+                    media_type: idImage.mediaType,
+                    data: idImage.b64,
                   },
                 },
                 {
@@ -142,7 +156,10 @@ Reglas:
               ],
             },
           ],
-        });
+            }),
+          log,
+          "identify",
+        );
         const idText = idMsg.content
           .filter((c) => c.type === "text")
           .map((c) => (c as { type: "text"; text: string }).text)
@@ -361,12 +378,17 @@ Reglas:
     messageContent.push({ type: "text", text: userPrompt });
 
     const startedAt = Date.now();
-    const msg = await client.messages.create({
-      model,
-      max_tokens: 2048,
-      system: systemPrompt,
-      messages: [{ role: "user", content: messageContent }],
-    });
+    const msg = await callWithRetry(
+      () =>
+        client.messages.create({
+          model,
+          max_tokens: 2048,
+          system: systemPrompt,
+          messages: [{ role: "user", content: messageContent }],
+        }),
+      log,
+      "detect",
+    );
     const durationMs = Date.now() - startedAt;
 
     const text = msg.content
@@ -456,6 +478,7 @@ async function downloadAndCompress(
   bucket: string,
   path: string,
   log: (...args: unknown[]) => void,
+  customMaxSide?: number,
 ): Promise<
   | {
       ok: true;
@@ -480,7 +503,7 @@ async function downloadAndCompress(
     const w = meta.width ?? 0;
     const h = meta.height ?? 0;
     const maxSide = Math.max(w, h);
-    let targetSide = MAX_SIDE_PX;
+    let targetSide = customMaxSide ?? MAX_SIDE_PX;
 
     let quality = 85;
     let out: Buffer | null = null;
@@ -746,4 +769,63 @@ function parseIdentify(
         : undefined,
     reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
   };
+}
+
+async function callWithRetry<T>(
+  fn: () => Promise<T>,
+  log: (...args: unknown[]) => void,
+  label: string,
+): Promise<T> {
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      const status = extractStatus(e);
+      const retryable =
+        status === 429 || status === 503 || status === 529 || status === 502;
+      if (!retryable || attempt === RETRY_MAX_ATTEMPTS) {
+        throw e;
+      }
+      const retryAfter = extractRetryAfter(e);
+      const waitMs = retryAfter
+        ? retryAfter * 1000
+        : Math.min(2000 * attempt + Math.random() * 500, 12000);
+      log(`anthropic ${label} retry`, {
+        attempt,
+        status,
+        waitMs,
+        retryAfter,
+      });
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("retry exhausted");
+}
+
+function extractStatus(e: unknown): number | null {
+  if (e && typeof e === "object") {
+    const anyE = e as { status?: number; response?: { status?: number } };
+    return anyE.status ?? anyE.response?.status ?? null;
+  }
+  return null;
+}
+
+function extractRetryAfter(e: unknown): number | null {
+  if (!e || typeof e !== "object") return null;
+  const anyE = e as {
+    headers?: Record<string, string>;
+    response?: { headers?: Record<string, string> | Headers };
+  };
+  const h =
+    anyE.headers ??
+    (anyE.response?.headers && typeof anyE.response.headers === "object"
+      ? (anyE.response.headers as Record<string, string>)
+      : undefined);
+  if (!h) return null;
+  const v = h["retry-after"] ?? h["Retry-After"];
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
