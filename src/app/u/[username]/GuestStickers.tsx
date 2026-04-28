@@ -12,15 +12,15 @@ type Props = {
 
 export function GuestStickers({ ownerCollection, ownerName }: Props) {
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState<"useful" | "owned" | "dups" | "all">(
-    "useful",
-  );
+  const [filter, setFilter] = useState<
+    "useful" | "missing" | "dups" | "all"
+  >("useful");
 
   const visible = useMemo(() => {
     return ALBUM.filter((s) => {
       const c = ownerCollection[s.code] ?? 0;
-      if (filter === "owned" && c === 0) return false;
       if (filter === "useful" && c <= 0) return false;
+      if (filter === "missing" && c > 0) return false;
       if (filter === "dups" && c < 2) return false;
       if (q) {
         const ql = q.toLowerCase();
@@ -35,12 +35,21 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
     });
   }, [q, filter, ownerCollection]);
 
+  const searchPlaceholder =
+    filter === "missing"
+      ? `Buscar entre las que le faltan a ${ownerName}...`
+      : filter === "dups"
+        ? `Buscar entre las repetidas de ${ownerName}...`
+        : filter === "all"
+          ? "Buscar en todo el álbum..."
+          : `Buscar entre las que tiene ${ownerName}...`;
+
   return (
     <div>
       <div className="relative">
         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)]" />
         <input
-          placeholder={`Buscar entre las que tiene ${ownerName}...`}
+          placeholder={searchPlaceholder}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="!pl-10"
@@ -51,6 +60,7 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
         {(
           [
             ["useful", "Las que tiene"],
+            ["missing", "Le faltan"],
             ["dups", "Repetidas"],
             ["all", "Todas"],
           ] as const
