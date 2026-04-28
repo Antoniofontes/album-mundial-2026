@@ -4,13 +4,17 @@ import { create } from "zustand";
 import { createClient } from "./supabase/client";
 
 type CollectionMap = Record<string, number>;
+/** Etiqueta corta por código (ej. @usuario) para figuritas reservadas por intercambio */
+type ReservationsMap = Record<string, string>;
 
 type Store = {
   loaded: boolean;
   userId: string | null;
   collection: CollectionMap;
+  reservations: ReservationsMap;
   setUser: (userId: string | null) => void;
   load: () => Promise<void>;
+  reloadReservations: () => Promise<void>;
   setCount: (code: string, count: number) => Promise<void>;
   bulkAdd: (codes: string[]) => Promise<void>;
 };
@@ -18,10 +22,45 @@ type Store = {
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingUpdates = new Map<string, number>();
 
+async function loadReservationLabels(userId: string): Promise<ReservationsMap> {
+  const supabase = createClient();
+  const { data: resRows, error } = await supabase
+    .from("sticker_reservations")
+    .select("sticker_code, from_user_id")
+    .eq("user_id", userId);
+  if (error) {
+    console.error("sticker_reservations", error);
+    return {};
+  }
+  const ids = [
+    ...new Set(
+      (resRows ?? []).map((r) => r.from_user_id).filter(Boolean),
+    ),
+  ] as string[];
+  let profileMap: Record<string, string> = {};
+  if (ids.length > 0) {
+    const { data: profs } = await supabase
+      .from("profiles")
+      .select("id, username")
+      .in("id", ids);
+    profileMap = Object.fromEntries(
+      (profs ?? []).map((p) => [p.id, `@${p.username}`]),
+    );
+  }
+  const reservations: ReservationsMap = {};
+  for (const r of resRows ?? []) {
+    reservations[r.sticker_code] = r.from_user_id
+      ? (profileMap[r.from_user_id] ?? "Intercambio")
+      : "Reservado";
+  }
+  return reservations;
+}
+
 export const useCollection = create<Store>((set, get) => ({
   loaded: false,
   userId: null,
   collection: {},
+  reservations: {},
 
   setUser(userId) {
     set({ userId });
@@ -33,24 +72,55 @@ export const useCollection = create<Store>((set, get) => ({
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      set({ loaded: true, userId: null, collection: {} });
+      set({
+        loaded: true,
+        userId: null,
+        collection: {},
+        reservations: {},
+      });
       return;
     }
 
-    const { data, error } = await supabase
-      .from("collection")
-      .select("sticker_code, count")
-      .eq("user_id", user.id);
+    const [collRes, resMap] = await Promise.all([
+      supabase
+        .from("collection")
+        .select("sticker_code, count")
+        .eq("user_id", user.id)
+        .then(async (r) => r),
+      loadReservationLabels(user.id),
+    ]);
+
+    const { data, error } = collRes;
 
     if (error) {
       console.error(error);
-      set({ loaded: true, userId: user.id, collection: {} });
+      set({
+        loaded: true,
+        userId: user.id,
+        collection: {},
+        reservations: resMap,
+      });
       return;
     }
 
     const map: CollectionMap = {};
     for (const row of data ?? []) map[row.sticker_code] = row.count;
-    set({ loaded: true, userId: user.id, collection: map });
+    set({
+      loaded: true,
+      userId: user.id,
+      collection: map,
+      reservations: resMap,
+    });
+  },
+
+  async reloadReservations() {
+    const userId = get().userId;
+    if (!userId) {
+      set({ reservations: {} });
+      return;
+    }
+    const reservations = await loadReservationLabels(userId);
+    set({ reservations });
   },
 
   async setCount(code, count) {

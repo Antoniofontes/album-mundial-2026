@@ -14,6 +14,7 @@ export default function TeamPage() {
   const router = useRouter();
   const team = TEAM_BY_CODE[params.code];
   const collection = useCollection((s) => s.collection);
+  const reservations = useCollection((s) => s.reservations);
   const setCount = useCollection((s) => s.setCount);
 
   const stickers = useMemo(
@@ -68,6 +69,7 @@ export default function TeamPage() {
             sticker={s}
             count={collection[s.code] ?? 0}
             onChange={(c) => setCount(s.code, c)}
+            reservedNote={reservations[s.code]}
           />
         ))}
       </div>

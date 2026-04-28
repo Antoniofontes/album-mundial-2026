@@ -75,6 +75,24 @@ export type UserStats = {
   missing: number;
 };
 
+export type TradeOfferRow = {
+  id: string;
+  from_user_id: string;
+  to_user_id: string;
+  sticker_codes: string[];
+  note: string | null;
+  status: "pending" | "accepted" | "cancelled" | "declined";
+  created_at: string;
+};
+
+export type StickerReservationRow = {
+  user_id: string;
+  sticker_code: string;
+  from_user_id: string | null;
+  offer_id: string | null;
+  created_at: string;
+};
+
 type TableShape<R, I, U> = {
   Row: R;
   Insert: I;
@@ -116,6 +134,21 @@ export type Database = {
           Pick<AlbumPage, "kind" | "storage_path" | "sticker_codes">,
         Partial<AlbumPage>
       >;
+      trade_offers: TableShape<
+        TradeOfferRow,
+        Pick<
+          TradeOfferRow,
+          "from_user_id" | "to_user_id" | "sticker_codes" | "status"
+        > &
+          Partial<TradeOfferRow>,
+        Partial<TradeOfferRow>
+      >;
+      sticker_reservations: TableShape<
+        StickerReservationRow,
+        Pick<StickerReservationRow, "user_id" | "sticker_code"> &
+          Partial<StickerReservationRow>,
+        Partial<StickerReservationRow>
+      >;
     };
     Views: {
       user_stats: {
@@ -123,7 +156,32 @@ export type Database = {
         Relationships: never[];
       };
     };
-    Functions: Record<string, never>;
+    Functions: {
+      use_scan: {
+        Args: Record<string, never>;
+        Returns: number;
+      };
+      send_trade_offer: {
+        Args: {
+          p_note?: string | null;
+          p_sticker_codes: string[];
+          p_to_user_id: string;
+        };
+        Returns: string;
+      };
+      accept_trade_offer: {
+        Args: { p_offer_id: string };
+        Returns: undefined;
+      };
+      cancel_trade_offer: {
+        Args: { p_offer_id: string };
+        Returns: undefined;
+      };
+      decline_trade_offer: {
+        Args: { p_offer_id: string };
+        Returns: undefined;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

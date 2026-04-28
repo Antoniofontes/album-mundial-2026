@@ -4,10 +4,14 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { ALBUM, stickersOfTeam, type Sticker } from "@/lib/album";
+import {
+  messageSpareDupes,
+  spareDupesBeyondMarkedOwned,
+} from "@/lib/trade-offers";
 import { TEAM_BY_CODE, TEAMS } from "@/lib/teams";
 import type { Holding, MarkedFriend } from "@/lib/supabase/types";
 import { useCollection } from "@/lib/store";
-import { ArrowLeft, Check, Search } from "lucide-react";
+import { ArrowLeft, Check, Search, Send } from "lucide-react";
 import clsx from "clsx";
 
 function AsignarInner() {
@@ -62,6 +66,36 @@ function AsignarInner() {
     }
     return list;
   }, [team, q, onlyMissing, collection]);
+
+  async function shareOfferList() {
+    if (!friendId) {
+      alert("Elegí un amigo primero.");
+      return;
+    }
+    const codes = spareDupesBeyondMarkedOwned(collection, friendHas);
+    if (codes.length === 0) {
+      alert(
+        "No hay repetidas tuyas fuera de lo que ya marcaste que tiene — o cargá más repetidas en tu álbum.",
+      );
+      return;
+    }
+    const friend = friends.find((f) => f.id === friendId);
+    const shortName = friend?.name.split(/\s+/)[0] ?? "vos";
+    const msg = messageSpareDupes(codes, shortName);
+    await navigator.clipboard.writeText(msg);
+    const digits = friend?.phone?.replace(/\D/g, "") ?? "";
+    if (digits.length >= 8) {
+      window.open(
+        `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`,
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } else {
+      alert(
+        "Listo: mensaje copiado al portapapeles. Pegalo donde quieras hablar con tu amigo.",
+      );
+    }
+  }
 
   async function toggle(stickerCode: string) {
     if (!friendId) {
@@ -190,6 +224,22 @@ function AsignarInner() {
           No hay figuritas que coincidan con el filtro.
         </p>
       )}
+
+      <div className="mt-8 pt-6 border-t border-[color:var(--card-border)]">
+        <p className="text-sm font-semibold">Ofrecer todas tus repetidas “libres”</p>
+        <p className="text-xs text-[color:var(--muted)] mt-1">
+          Genera un mensaje con las repetidas que tenés y que no marcaste como que él ya tiene (ideal para
+          WhatsApp).
+        </p>
+        <button
+          type="button"
+          className="btn btn-secondary w-full mt-3 inline-flex items-center justify-center gap-2"
+          onClick={() => void shareOfferList()}
+        >
+          <Send className="w-4 h-4" />
+          Copiar / WhatsApp
+        </button>
+      </div>
     </div>
   );
 }

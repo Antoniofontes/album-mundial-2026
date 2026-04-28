@@ -3,8 +3,9 @@ import { notFound } from "next/navigation";
 import { ALBUM, stickersOfTeam } from "@/lib/album";
 import { GROUPS, teamsByGroup } from "@/lib/teams";
 import Link from "next/link";
-import { ArrowLeft, BookOpen, Trophy } from "lucide-react";
+import { ArrowLeft, Trophy, User } from "lucide-react";
 import { GuestStickers } from "./GuestStickers";
+import { ProfileTradeActions } from "./ProfileTradeActions";
 
 type Props = { params: Promise<{ username: string }> };
 
@@ -43,9 +44,14 @@ export default async function PublicProfile({ params }: Props) {
   );
   const total = ALBUM.length;
 
-  const grouped = teamsByGroup();
+  const { data: authData } = await supabase.auth.getUser();
+  const viewerId = authData.user?.id ?? null;
+
+  const isOwnProfile = viewerId !== null && viewerId === profile.id;
   const collectionObj: Record<string, number> = {};
   map.forEach((v, k) => (collectionObj[k] = v));
+
+  const grouped = teamsByGroup();
 
   return (
     <main className="min-h-screen pb-12">
@@ -88,16 +94,33 @@ export default async function PublicProfile({ params }: Props) {
           </div>
         </div>
 
-        <div className="card mt-3 !p-3 flex items-center gap-2 bg-[color:var(--primary)]/10 border-[color:var(--primary)]/30">
-          <Trophy className="w-5 h-5 text-[color:var(--primary)]" />
-          <p className="text-xs">
-            Modo invitado · podés ver pero no marcar.{" "}
-            <Link href="/login" className="underline font-semibold">
-              Crear cuenta
-            </Link>{" "}
-            para tener tu propio álbum.
-          </p>
-        </div>
+        {!viewerId ? (
+          <div className="card mt-3 !p-3 flex items-center gap-2 bg-[color:var(--primary)]/10 border-[color:var(--primary)]/30">
+            <Trophy className="w-5 h-5 text-[color:var(--primary)] shrink-0" />
+            <p className="text-xs">
+              Modo invitado · podés ver pero no marcar.{" "}
+              <Link href="/login" className="underline font-semibold">
+                Crear cuenta / Entrar
+              </Link>{" "}
+              para intercambiar y tener tu álbum.
+            </p>
+          </div>
+        ) : isOwnProfile ? (
+          <div className="card mt-3 !p-3 flex items-center gap-2 bg-[color:var(--muted)]/10 border-[color:var(--card-border)]">
+            <User className="w-5 h-5 text-[color:var(--muted)] shrink-0" />
+            <p className="text-xs">
+              Estás viendo tu perfil público ·{" "}
+              <Link href="/perfil" className="underline font-semibold">
+                Ir a mi cuenta
+              </Link>
+            </p>
+          </div>
+        ) : (
+          <ProfileTradeActions
+            targetUserId={profile.id}
+            targetDisplayName={profile.display_name}
+          />
+        )}
 
         <h2 className="text-xs font-bold tracking-widest text-[color:var(--muted)] mt-6 mb-2">
           ¿LE BUSCÁS UNA FIGURITA?

@@ -47,6 +47,7 @@ function buildWhatsAppList(collection: Record<string, number>): string {
 export default function ListaPage() {
   const router = useRouter();
   const collection = useCollection((s) => s.collection);
+  const reservations = useCollection((s) => s.reservations);
   const setCount = useCollection((s) => s.setCount);
   const [filter, setFilter] = useState<"all" | "owned" | "missing" | "dups">("all");
   const [q, setQ] = useState("");
@@ -170,6 +171,7 @@ export default function ListaPage() {
             sticker={s}
             count={collection[s.code] ?? 0}
             onChange={(c) => setCount(s.code, c)}
+            reservedNote={reservations[s.code]}
           />
         ))}
       </div>

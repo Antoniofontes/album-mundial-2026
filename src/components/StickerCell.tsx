@@ -9,9 +9,17 @@ type Props = {
   onChange: (newCount: number) => void;
   /** En modo readOnly se muestra pero no se puede tocar */
   readOnly?: boolean;
+  /** Leyenda si esta figurita está reservada por un intercambio pendiente */
+  reservedNote?: string;
 };
 
-export function StickerCell({ sticker, count, onChange, readOnly }: Props) {
+export function StickerCell({
+  sticker,
+  count,
+  onChange,
+  readOnly,
+  reservedNote,
+}: Props) {
   const state = count === 0 ? "missing" : count === 1 ? "owned" : "duplicate";
 
   function cycle() {
@@ -47,6 +55,14 @@ export function StickerCell({ sticker, count, onChange, readOnly }: Props) {
       {count > 1 && (
         <span className="absolute -top-2 -right-2 bg-[color:var(--accent)] text-white text-[10px] font-bold rounded-full w-6 h-6 flex items-center justify-center shadow">
           ×{count}
+        </span>
+      )}
+      {reservedNote && (
+        <span
+          className="absolute bottom-0 left-0 right-0 px-0.5 py-px text-[8px] leading-tight font-semibold text-center truncate bg-black/55 text-[color:var(--gold)] pointer-events-none rounded-b-[inherit]"
+          title={reservedNote}
+        >
+          {reservedNote}
         </span>
       )}
     </button>
