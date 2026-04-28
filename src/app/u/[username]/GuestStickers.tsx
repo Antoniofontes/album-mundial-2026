@@ -1,23 +1,44 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ALBUM } from "@/lib/album";
+import { useMemo, useState, useEffect } from "react";
+import { ALBUM, stickersOfTeam, type Sticker } from "@/lib/album";
+import { TEAMS, TEAM_BY_CODE } from "@/lib/teams";
 import { Search, Check } from "lucide-react";
 import clsx from "clsx";
+
+const PAGE_SIZE = 72;
 
 type Props = {
   ownerCollection: Record<string, number>;
   ownerName: string;
 };
 
+function albumSubset(scope: string | null): Sticker[] {
+  if (!scope) return ALBUM;
+  switch (scope) {
+    case "__intro":
+      return ALBUM.filter((s) => s.type === "intro");
+    case "__fwc":
+      return ALBUM.filter((s) => s.type === "fwc");
+    case "__cc":
+      return ALBUM.filter((s) => s.type === "coca_cola");
+    default:
+      return stickersOfTeam(scope);
+  }
+}
+
 export function GuestStickers({ ownerCollection, ownerName }: Props) {
   const [q, setQ] = useState("");
+  const [teamScope, setTeamScope] = useState<string | null>(null);
   const [filter, setFilter] = useState<
     "useful" | "missing" | "dups" | "all"
   >("useful");
+  const [shownCount, setShownCount] = useState(PAGE_SIZE);
+
+  const baseAlbum = useMemo(() => albumSubset(teamScope), [teamScope]);
 
   const visible = useMemo(() => {
-    return ALBUM.filter((s) => {
+    return baseAlbum.filter((s) => {
       const c = ownerCollection[s.code] ?? 0;
       if (filter === "useful" && c <= 0) return false;
       if (filter === "missing" && c > 0) return false;
@@ -33,7 +54,11 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
       }
       return true;
     });
-  }, [q, filter, ownerCollection]);
+  }, [q, filter, ownerCollection, baseAlbum]);
+
+  useEffect(() => {
+    setShownCount(PAGE_SIZE);
+  }, [teamScope, filter, q]);
 
   const searchPlaceholder =
     filter === "missing"
@@ -41,12 +66,50 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
       : filter === "dups"
         ? `Buscar entre las repetidas de ${ownerName}...`
         : filter === "all"
-          ? "Buscar en todo el álbum..."
+          ? "Buscar en esta vista..."
           : `Buscar entre las que tiene ${ownerName}...`;
+
+  const scopeHint = !teamScope
+    ? "Todo el álbum"
+    : teamScope === "__intro"
+      ? "Portada"
+      : teamScope === "__fwc"
+        ? "FWC"
+        : teamScope === "__cc"
+          ? "Coca-Cola"
+          : TEAM_BY_CODE[teamScope]
+            ? `${TEAM_BY_CODE[teamScope].flag} ${TEAM_BY_CODE[teamScope].name}`
+            : "Sección";
+
+  const slice = visible.slice(0, shownCount);
+  const hasMore = visible.length > shownCount;
 
   return (
     <div>
-      <div className="relative">
+      <label className="block text-[11px] font-semibold text-[color:var(--muted)] uppercase tracking-wide mb-1">
+        País / sección
+      </label>
+      <select
+        value={teamScope ?? ""}
+        onChange={(e) => setTeamScope(e.target.value || null)}
+        className="w-full"
+      >
+        <option value="">Todo el álbum</option>
+        <optgroup label="Selecciones">
+          {TEAMS.map((t) => (
+            <option key={t.code} value={t.code}>
+              {t.flag} {t.name}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Extras">
+          <option value="__intro">Portada (00)</option>
+          <option value="__fwc">FIFA World Cup (FWC1–FWC19)</option>
+          <option value="__cc">Coca-Cola (CC1–CC14)</option>
+        </optgroup>
+      </select>
+
+      <div className="relative mt-3">
         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)]" />
         <input
           placeholder={searchPlaceholder}
@@ -67,6 +130,7 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
         ).map(([k, l]) => (
           <button
             key={k}
+            type="button"
             onClick={() => setFilter(k)}
             className={`chip whitespace-nowrap ${
               filter === k
@@ -80,11 +144,13 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
       </div>
 
       <div className="text-xs text-[color:var(--muted)] mt-2">
-        {visible.length} resultados
+        {visible.length} resultado{visible.length === 1 ? "" : "s"}
+        {" · "}
+        <span className="text-[color:var(--muted)]/90">{scopeHint}</span>
       </div>
 
       <div className="grid grid-cols-3 gap-2 mt-2">
-        {visible.slice(0, 60).map((s) => {
+        {slice.map((s) => {
           const c = ownerCollection[s.code] ?? 0;
           return (
             <div
@@ -110,10 +176,15 @@ export function GuestStickers({ ownerCollection, ownerName }: Props) {
           );
         })}
       </div>
-      {visible.length > 60 && (
-        <p className="text-xs text-[color:var(--muted)] mt-3 text-center">
-          Mostrando 60 de {visible.length}. Filtrá por equipo para ver más.
-        </p>
+
+      {hasMore && (
+        <button
+          type="button"
+          className="btn btn-secondary w-full mt-4 text-sm"
+          onClick={() => setShownCount((n) => n + PAGE_SIZE)}
+        >
+          Mostrar más ({visible.length - slice.length} restantes)
+        </button>
       )}
     </div>
   );
