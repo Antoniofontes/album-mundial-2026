@@ -17,14 +17,11 @@ function truncate(str: string, max: number): string {
   return str.length > max ? str.slice(0, max - 1) + "…" : str;
 }
 
-function roundRect(
+function filledRoundRect(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
+  x: number, y: number, w: number, h: number, r: number,
 ) {
+  ctx.beginPath();
   if (ctx.roundRect) {
     ctx.roundRect(x, y, w, h, r);
   } else {
@@ -52,118 +49,191 @@ export function drawShareCard(
   const unit = Math.min(w, h);
   const midX = w / 2;
   const isStories = h > w;
+  const progress = Math.min(owned / total, 1);
 
-  // --- Background ---
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#0b0d12";
+
+  // ── Background: deep navy → dark teal gradient ──
+  const bg = ctx.createLinearGradient(0, 0, w * 0.6, h);
+  bg.addColorStop(0, "#050c18");
+  bg.addColorStop(0.5, "#071612");
+  bg.addColorStop(1, "#06091a");
+  ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
 
-  // Green radial glow (top-left)
-  const gGreen = ctx.createRadialGradient(
-    w * 0.15, h * 0.18, 0,
-    w * 0.15, h * 0.18, w * 0.9,
-  );
-  gGreen.addColorStop(0, "rgba(0,176,79,0.30)");
+  // Green radial glow at top-center
+  const gGreen = ctx.createRadialGradient(midX, 0, 0, midX, 0, h * 0.65);
+  gGreen.addColorStop(0, "rgba(0,176,79,0.28)");
   gGreen.addColorStop(1, "transparent");
   ctx.fillStyle = gGreen;
   ctx.fillRect(0, 0, w, h);
 
-  // Pink radial glow (bottom-right)
-  const gPink = ctx.createRadialGradient(
-    w * 0.88, h * 0.88, 0,
-    w * 0.88, h * 0.88, w * 0.7,
-  );
-  gPink.addColorStop(0, "rgba(255,51,102,0.18)");
-  gPink.addColorStop(1, "transparent");
-  ctx.fillStyle = gPink;
+  // Gold radial glow at bottom
+  const gGold = ctx.createRadialGradient(midX, h, 0, midX, h, unit * 0.7);
+  gGold.addColorStop(0, "rgba(212,175,55,0.14)");
+  gGold.addColorStop(1, "transparent");
+  ctx.fillStyle = gGold;
   ctx.fillRect(0, 0, w, h);
 
-  // Decorative concentric arcs (bottom-right corner)
-  const arcCx = w * 1.05;
-  const arcCy = h * 1.05;
-  for (const [scale, alpha] of [
-    [0.9, 0.07],
-    [0.68, 0.06],
-    [0.46, 0.05],
-  ] as [number, number][]) {
-    ctx.beginPath();
-    ctx.arc(arcCx, arcCy, unit * scale, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(0,176,79,${alpha})`;
-    ctx.lineWidth = unit * 0.022;
-    ctx.stroke();
+  // Subtle dot grid texture
+  const dotSpacing = unit * 0.057;
+  const dotR = unit * 0.0015;
+  ctx.fillStyle = "rgba(255,255,255,0.04)";
+  for (let dx = dotSpacing * 0.5; dx < w; dx += dotSpacing) {
+    for (let dy = dotSpacing * 0.5; dy < h; dy += dotSpacing) {
+      ctx.beginPath();
+      ctx.arc(dx, dy, dotR, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
-  // --- Content ---
-  const startY = isStories ? h * 0.3 : h * 0.22;
+  // ── Layout anchors ──
+  const badgeCY    = isStories ? h * 0.115 : h * 0.1;
+  const ringCY     = isStories ? h * 0.36  : h * 0.43;
+  const ringRadius = unit * 0.245;
+  const ringStroke = unit * 0.027;
 
-  // "⚽ MUNDIAL 2026"
+  // ── TOP BADGE "FIFA WORLD CUP 2026" ──
+  const badgeFontSz = unit * 0.038;
+  ctx.font = `700 ${badgeFontSz}px system-ui,-apple-system,sans-serif`;
+  const badgeLabel = "FIFA WORLD CUP 2026";
+  const labelW = ctx.measureText(badgeLabel).width;
+  const bpx = unit * 0.04;
+  const bpy = unit * 0.02;
+  const bW = labelW + bpx * 2;
+  const bH = badgeFontSz + bpy * 2;
+  const bX = midX - bW / 2;
+  const bY = badgeCY - bH / 2;
+
+  filledRoundRect(ctx, bX, bY, bW, bH, bH / 2);
+  ctx.fillStyle = "rgba(0,176,79,0.18)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,200,90,0.35)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  const badgeTextGrad = ctx.createLinearGradient(bX, 0, bX + bW, 0);
+  badgeTextGrad.addColorStop(0, "#55eea0");
+  badgeTextGrad.addColorStop(1, "#d4af37");
+  ctx.fillStyle = badgeTextGrad;
   ctx.textAlign = "center";
-  ctx.font = `600 ${unit * 0.046}px system-ui,-apple-system,sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.4)";
-  ctx.fillText("⚽  MUNDIAL 2026", midX, startY);
+  ctx.fillText(badgeLabel, midX, bY + bH * 0.72);
 
-  // Big owned number
-  ctx.font = `900 ${unit * 0.25}px system-ui,-apple-system,sans-serif`;
-  ctx.fillStyle = "#00b04f";
-  ctx.fillText(String(owned), midX, startY + unit * 0.3);
-
-  // "de 994 figuritas"
-  ctx.font = `500 ${unit * 0.058}px system-ui,-apple-system,sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.5)";
-  ctx.fillText(`de ${total} figuritas`, midX, startY + unit * 0.4);
-
-  // Progress bar
-  const barY = startY + unit * 0.5;
-  const barH = unit * 0.044;
-  const barW = w * 0.72;
-  const barX = (w - barW) / 2;
-  const barR = barH / 2;
+  // ── CIRCULAR PROGRESS RING ──
+  const startAngle = -Math.PI / 2;
 
   // Track
   ctx.beginPath();
-  roundRect(ctx, barX, barY, barW, barH, barR);
-  ctx.fillStyle = "rgba(255,255,255,0.1)";
+  ctx.arc(midX, ringCY, ringRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,255,255,0.07)";
+  ctx.lineWidth = ringStroke;
+  ctx.lineCap = "butt";
+  ctx.stroke();
+
+  if (progress > 0) {
+    // Outer glow (wider, low opacity)
+    ctx.beginPath();
+    ctx.arc(midX, ringCY, ringRadius, startAngle, startAngle + Math.PI * 2 * progress);
+    ctx.strokeStyle = "rgba(0,220,100,0.12)";
+    ctx.lineWidth = ringStroke * 2.8;
+    ctx.lineCap = "round";
+    ctx.stroke();
+
+    // Main arc with gradient
+    const arcGrad = ctx.createLinearGradient(
+      midX - ringRadius, ringCY,
+      midX + ringRadius, ringCY,
+    );
+    arcGrad.addColorStop(0, "#00b04f");
+    arcGrad.addColorStop(0.55, "#40dd80");
+    arcGrad.addColorStop(1, "#d4af37");
+
+    ctx.beginPath();
+    ctx.arc(midX, ringCY, ringRadius, startAngle, startAngle + Math.PI * 2 * progress);
+    ctx.strokeStyle = arcGrad;
+    ctx.lineWidth = ringStroke;
+    ctx.lineCap = "round";
+    ctx.stroke();
+
+    // Gold dot at arc tip
+    const tipAngle = startAngle + Math.PI * 2 * progress;
+    const tipX = midX + Math.cos(tipAngle) * ringRadius;
+    const tipY = ringCY + Math.sin(tipAngle) * ringRadius;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, ringStroke * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = "#d4af37";
+    ctx.fill();
+    // Glow around dot
+    const dotGlow = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, ringStroke * 1.5);
+    dotGlow.addColorStop(0, "rgba(212,175,55,0.5)");
+    dotGlow.addColorStop(1, "transparent");
+    ctx.fillStyle = dotGlow;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, ringStroke * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ── Number inside ring ──
+  const numFontSz = ringRadius * 0.74;
+  ctx.textAlign = "center";
+  ctx.font = `900 ${numFontSz}px system-ui,-apple-system,sans-serif`;
+  ctx.fillStyle = "#ffffff";
+  const numBaseline = ringCY + numFontSz * 0.25;
+  ctx.fillText(String(owned), midX, numBaseline);
+
+  const subFontSz = ringRadius * 0.22;
+  ctx.font = `400 ${subFontSz}px system-ui,-apple-system,sans-serif`;
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.fillText(`de ${total}`, midX, numBaseline + subFontSz * 1.5);
+
+  // ── Percentage label ──
+  const pctY = ringCY + ringRadius + unit * 0.1;
+  const pctFontSz = unit * 0.052;
+  ctx.font = `700 ${pctFontSz}px system-ui,-apple-system,sans-serif`;
+  const pctGrad = ctx.createLinearGradient(midX - unit * 0.2, 0, midX + unit * 0.2, 0);
+  pctGrad.addColorStop(0, "#d4af37");
+  pctGrad.addColorStop(1, "#f0d060");
+  ctx.fillStyle = pctGrad;
+  ctx.fillText(`${pct}% completado`, midX, pctY);
+
+  // ── Name card (frosted glass effect) ──
+  const cardGap  = unit * 0.09;
+  const cardH    = unit * 0.21;
+  const cardW    = w * 0.76;
+  const cardX    = (w - cardW) / 2;
+  const cardY    = isStories ? h * 0.66 : pctY + cardGap;
+  const cardRad  = unit * 0.035;
+
+  filledRoundRect(ctx, cardX, cardY, cardW, cardH, cardRad);
+  ctx.fillStyle = "rgba(255,255,255,0.055)";
   ctx.fill();
 
-  // Fill
-  const fillW = Math.max(barW * (owned / total), barR * 2);
-  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-  grad.addColorStop(0, "#00b04f");
-  grad.addColorStop(0.65, "#50c878");
-  grad.addColorStop(1, "#d4af37");
-  ctx.beginPath();
-  roundRect(ctx, barX, barY, fillW, barH, barR);
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  // Percentage
-  ctx.font = `700 ${unit * 0.054}px system-ui,-apple-system,sans-serif`;
-  ctx.fillStyle = "#d4af37";
-  ctx.fillText(`${pct}% completado`, midX, barY + barH + unit * 0.08);
-
-  // Separator line
-  const sepY = barY + barH + unit * 0.18;
-  ctx.beginPath();
-  ctx.moveTo(w * 0.3, sepY);
-  ctx.lineTo(w * 0.7, sepY);
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  // Subtle border gradient (top brighter, bottom dimmer)
+  ctx.strokeStyle = "rgba(255,255,255,0.11)";
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Display name
-  ctx.font = `700 ${unit * 0.068}px system-ui,-apple-system,sans-serif`;
+  // Top-left bright highlight line on card
+  ctx.beginPath();
+  ctx.moveTo(cardX + cardRad, cardY);
+  ctx.lineTo(cardX + cardW - cardRad, cardY);
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  const nameY = cardY + cardH * 0.46;
+  ctx.font = `700 ${unit * 0.065}px system-ui,-apple-system,sans-serif`;
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(truncate(name, 22), midX, sepY + unit * 0.105);
+  ctx.fillText(truncate(name, 20), midX, nameY);
 
-  // @username
-  ctx.font = `500 ${unit * 0.047}px system-ui,-apple-system,sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.4)";
-  ctx.fillText(`@${username}`, midX, sepY + unit * 0.185);
+  ctx.font = `400 ${unit * 0.042}px system-ui,-apple-system,sans-serif`;
+  ctx.fillStyle = "rgba(255,255,255,0.42)";
+  ctx.fillText(`@${username}`, midX, cardY + cardH * 0.79);
 
-  // Domain watermark
-  ctx.font = `400 ${unit * 0.038}px system-ui,-apple-system,sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.22)";
-  ctx.fillText(hostname, midX, h - unit * 0.055);
+  // ── Domain watermark ──
+  ctx.font = `400 ${unit * 0.034}px system-ui,-apple-system,sans-serif`;
+  ctx.fillStyle = "rgba(255,255,255,0.2)";
+  ctx.fillText(hostname, midX, h - unit * 0.035);
 }
 
 export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
