@@ -564,17 +564,14 @@ export default function ScanPage() {
                   Pagar por WhatsApp
                 </a>
                 {process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL && (
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(
-                        process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL!,
-                      );
-                      alert("Email de PayPal copiado: " + process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL);
-                    }}
+                  <a
+                    href={`https://www.paypal.com/cgi-bin/webscr?cmd=_xclick&business=${encodeURIComponent(process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL)}&amount=${process.env.NEXT_PUBLIC_SCAN_PAYPAL_AMOUNT ?? "5"}&currency_code=${process.env.NEXT_PUBLIC_SCAN_PAYPAL_CURRENCY ?? "USD"}&item_name=${encodeURIComponent("Pack escaneos - Álbum Mundial 2026")}&no_shipping=1`}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="btn btn-secondary w-full justify-center"
                   >
-                    💳 Pagar por PayPal · {process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL}
-                  </button>
+                    💳 Pagar por PayPal
+                  </a>
                 )}
                 <p className="text-[10px] text-center text-[color:var(--muted)]">
                   Después de pagar mandame el comprobante por WhatsApp y te activo los créditos.
