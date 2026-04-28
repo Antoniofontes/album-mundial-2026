@@ -1,13 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Profile } from "@/lib/supabase/types";
 import { useCollection } from "@/lib/store";
 import { ALBUM } from "@/lib/album";
-import { LogOut, Share2, Save, Eye, EyeOff, Copy, Smartphone } from "lucide-react";
+import {
+  LogOut,
+  Share2,
+  Save,
+  Eye,
+  EyeOff,
+  Copy,
+  Smartphone,
+  Download,
+  ImageIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  drawShareCard,
+  getCardSize,
+  canvasToBlob,
+  type CardFormat,
+} from "@/lib/shareCard";
+
+const PREVIEW_SIZE = { square: { w: 280, h: 280 }, stories: { w: 158, h: 280 } };
 
 export default function PerfilPage() {
   const router = useRouter();
@@ -19,6 +37,11 @@ export default function PerfilPage() {
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [siteUrl, setSiteUrl] = useState("");
+
+  // Card state
+  const [cardFormat, setCardFormat] = useState<CardFormat>("square");
+  const [cardSharing, setCardSharing] = useState(false);
+  const previewRef = useRef<HTMLCanvasElement>(null);
 
   const collection = useCollection((s) => s.collection);
   const owned = ALBUM.filter((s) => (collection[s.code] ?? 0) > 0).length;
@@ -50,6 +73,80 @@ export default function PerfilPage() {
       }
     })();
   }, []);
+
+  // Redraw preview whenever relevant data changes
+  const drawPreview = useCallback(() => {
+    const canvas = previewRef.current;
+    if (!canvas || !profile) return;
+    const prev = PREVIEW_SIZE[cardFormat];
+    canvas.width = prev.w;
+    canvas.height = prev.h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    drawShareCard(ctx, {
+      name,
+      username,
+      owned,
+      total,
+      hostname: siteUrl ? new URL(siteUrl).hostname : "albumuniversal.app",
+      format: cardFormat,
+    });
+  }, [profile, name, username, owned, total, siteUrl, cardFormat]);
+
+  useEffect(() => {
+    drawPreview();
+  }, [drawPreview]);
+
+  function buildFullCanvas(): HTMLCanvasElement {
+    const { w, h } = getCardSize(cardFormat);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    drawShareCard(ctx, {
+      name,
+      username,
+      owned,
+      total,
+      hostname: siteUrl ? new URL(siteUrl).hostname : "albumuniversal.app",
+      format: cardFormat,
+    });
+    return canvas;
+  }
+
+  function handleDownload() {
+    const canvas = buildFullCanvas();
+    const a = document.createElement("a");
+    a.href = canvas.toDataURL("image/png");
+    a.download = `album-mundial-2026-${username}.png`;
+    a.click();
+  }
+
+  async function handleShareCard() {
+    setCardSharing(true);
+    try {
+      const canvas = buildFullCanvas();
+      const blob = await canvasToBlob(canvas);
+      const file = new File([blob], `album-mundial-2026-${username}.png`, {
+        type: "image/png",
+      });
+
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `${name} — Álbum Mundial 2026`,
+          text: `Tengo ${owned} de ${total} figuritas del Mundial 2026 🌍`,
+        });
+      } else {
+        // Fallback: download
+        handleDownload();
+      }
+    } catch {
+      // user cancelled or not supported — silently ignore
+    } finally {
+      setCardSharing(false);
+    }
+  }
 
   async function save() {
     if (!profile) return;
@@ -98,9 +195,10 @@ export default function PerfilPage() {
   }
 
   const publicUrl = `${siteUrl}/u/${username}`;
+  const prev = PREVIEW_SIZE[cardFormat];
 
   return (
-    <div className="max-w-md mx-auto px-4 pt-6">
+    <div className="max-w-md mx-auto px-4 pt-6 pb-8">
       <header className="flex justify-between items-start">
         <div>
           <h1 className="text-2xl font-black">Mi perfil</h1>
@@ -128,6 +226,68 @@ export default function PerfilPage() {
           <div className="text-[10px] uppercase text-[color:var(--muted)]">Faltan</div>
         </div>
       </div>
+
+      {/* ── Tarjeta compartible ── */}
+      <section className="mt-6">
+        <h2 className="text-xs uppercase text-[color:var(--muted)] mb-3">
+          Tarjeta de progreso
+        </h2>
+
+        {/* Format toggle */}
+        <div className="flex gap-2 mb-4">
+          {(["square", "stories"] as CardFormat[]).map((fmt) => (
+            <button
+              key={fmt}
+              onClick={() => setCardFormat(fmt)}
+              className={`chip ${
+                cardFormat === fmt
+                  ? "!bg-[color:var(--primary)] text-white !border-transparent"
+                  : ""
+              }`}
+            >
+              {fmt === "square" ? "⬛ Cuadrado" : "📱 Stories"}
+            </button>
+          ))}
+        </div>
+
+        {/* Preview */}
+        <div className="flex justify-center">
+          <div
+            className="rounded-2xl overflow-hidden shadow-xl"
+            style={{ width: prev.w, height: prev.h }}
+          >
+            <canvas
+              ref={previewRef}
+              width={prev.w}
+              height={prev.h}
+              style={{ display: "block", width: prev.w, height: prev.h }}
+            />
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          <button onClick={handleDownload} className="btn btn-secondary">
+            <Download className="w-4 h-4" />
+            Descargar
+          </button>
+          <button
+            onClick={handleShareCard}
+            disabled={cardSharing}
+            className="btn btn-primary disabled:opacity-60"
+          >
+            {cardSharing ? (
+              <ImageIcon className="w-4 h-4 animate-pulse" />
+            ) : (
+              <Share2 className="w-4 h-4" />
+            )}
+            {cardSharing ? "Compartiendo..." : "Compartir"}
+          </button>
+        </div>
+        <p className="text-[11px] text-center text-[color:var(--muted)] mt-2">
+          Descargá y compartí en Instagram, WhatsApp o donde quieras
+        </p>
+      </section>
 
       <section className="mt-6 grid gap-3">
         <label className="block">
@@ -171,9 +331,7 @@ export default function PerfilPage() {
           </div>
           <button
             onClick={() => setIsPublic((p) => !p)}
-            className={`btn !px-4 ${
-              isPublic ? "btn-primary" : "btn-secondary"
-            }`}
+            className={`btn !px-4 ${isPublic ? "btn-primary" : "btn-secondary"}`}
           >
             {isPublic ? "Sí" : "No"}
           </button>
