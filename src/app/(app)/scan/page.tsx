@@ -548,6 +548,11 @@ export default function ScanPage() {
                 Cada escaneo usa la IA de Anthropic, que tiene costo. Para seguir
                 escaneando escribime por WhatsApp y coordinamos.
               </p>
+              {process.env.NEXT_PUBLIC_SCAN_PACK_PRICE && (
+                <p className="text-xs font-semibold mt-2">
+                  Pack de escaneos extra · {process.env.NEXT_PUBLIC_SCAN_PACK_PRICE}
+                </p>
+              )}
               <div className="mt-3 grid gap-2">
                 <a
                   href={`https://wa.me/${process.env.NEXT_PUBLIC_SCAN_LIMIT_WA_NUMBER ?? ""}?text=${encodeURIComponent("Hola! Quiero más escaneos para el álbum del Mundial 2026 🌍")}`}
@@ -556,13 +561,24 @@ export default function ScanPage() {
                   className="btn !bg-[#25D366] !border-[#25D366] text-white w-full justify-center"
                 >
                   <MessageCircle className="w-4 h-4" />
-                  Escribir por WhatsApp
+                  Pagar por WhatsApp
                 </a>
-                {process.env.NEXT_PUBLIC_SCAN_PACK_PRICE && (
-                  <p className="text-[11px] text-center text-[color:var(--muted)]">
-                    Pack de escaneos extra · {process.env.NEXT_PUBLIC_SCAN_PACK_PRICE}
-                  </p>
+                {process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL && (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(
+                        process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL!,
+                      );
+                      alert("Email de PayPal copiado: " + process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL);
+                    }}
+                    className="btn btn-secondary w-full justify-center"
+                  >
+                    💳 Pagar por PayPal · {process.env.NEXT_PUBLIC_SCAN_PAYPAL_EMAIL}
+                  </button>
                 )}
+                <p className="text-[10px] text-center text-[color:var(--muted)]">
+                  Después de pagar mandame el comprobante por WhatsApp y te activo los créditos.
+                </p>
               </div>
             </div>
           </div>
