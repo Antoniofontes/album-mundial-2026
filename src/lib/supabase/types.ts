@@ -6,6 +6,8 @@ export type Profile = {
   bio: string | null;
   is_public: boolean;
   created_at: string;
+  scans_used: number;
+  scan_credits: number;
 };
 
 export type CollectionRow = {

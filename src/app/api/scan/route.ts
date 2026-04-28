@@ -24,6 +24,7 @@ const ID_MAX_SIDE_PX = 768;
 const DETECTION_MODEL = "claude-sonnet-4-5";
 const IDENTIFY_MODEL = "claude-haiku-4-5";
 const RETRY_MAX_ATTEMPTS = 4;
+const FREE_SCAN_LIMIT = 30;
 
 type ScanRequestBody = {
   scanId: string;
@@ -63,6 +64,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "no auth", reqId }, { status: 401 });
     }
     log("user", user.id);
+
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("scans_used, scan_credits")
+      .eq("id", user.id)
+      .single();
+    const scansUsed = prof?.scans_used ?? 0;
+    const scanCredits = prof?.scan_credits ?? 0;
+    const remaining = FREE_SCAN_LIMIT + scanCredits - scansUsed;
+    log("scan quota", { scansUsed, scanCredits, remaining });
+    if (remaining <= 0) {
+      errLog("scan limit reached", { scansUsed, scanCredits });
+      return NextResponse.json(
+        { error: "scan_limit_reached", reqId },
+        { status: 402 },
+      );
+    }
 
     const userImage = await downloadAndCompress(
       supabase,
@@ -450,6 +468,12 @@ Reglas:
       })
       .eq("id", scanId);
 
+    await supabase
+      .from("profiles")
+      .update({ scans_used: scansUsed + 1 })
+      .eq("id", user.id);
+    log("scan quota incremented", { newScansUsed: scansUsed + 1 });
+
     return NextResponse.json({
       reqId,
       detected,
@@ -464,6 +488,7 @@ Reglas:
       durationMs,
       usage: msg.usage,
       model,
+      scansRemaining: remaining - 1,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "scan failed";

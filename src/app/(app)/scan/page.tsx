@@ -14,6 +14,8 @@ import {
   Image as ImageIcon,
   ImagePlus,
   Library,
+  MessageCircle,
+  Zap,
 } from "lucide-react";
 import {
   ALBUM_BY_CODE,
@@ -48,6 +50,8 @@ const POOL_SIZE = 1;
 export default function ScanPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [running, setRunning] = useState(false);
+  const [scansRemaining, setScansRemaining] = useState<number | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
   const [ctxKind, setCtxKind] = useState<ScanContext["kind"]>("auto");
   const [teamCode, setTeamCode] = useState<string>("ARG");
   const [teamSheet, setTeamSheet] = useState<1 | 2>(1);
@@ -78,6 +82,28 @@ export default function ScanPage() {
       mounted = false;
     };
   }, [customId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !mounted) return;
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("scans_used, scan_credits")
+        .eq("id", user.id)
+        .single();
+      if (!mounted) return;
+      const FREE_LIMIT = 30;
+      const used = (prof as { scans_used?: number } | null)?.scans_used ?? 0;
+      const credits = (prof as { scan_credits?: number } | null)?.scan_credits ?? 0;
+      const remaining = FREE_LIMIT + credits - used;
+      setScansRemaining(Math.max(0, remaining));
+      setLimitReached(remaining <= 0);
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const ctx: ScanContext = useMemo(() => {
     if (ctxKind === "team") return { kind: "team", teamCode, teamSheet };
@@ -265,6 +291,7 @@ export default function ScanPage() {
             usedReference: boolean;
             referencesCount?: number;
             detectedSheet?: 1 | 2;
+            scansRemaining?: number;
             autoIdentified?: {
               kind: string;
               teamCode?: string;
@@ -276,6 +303,18 @@ export default function ScanPage() {
 
       if (!res.ok || "error" in json) {
         const msg = "error" in json ? json.error : "error";
+        if (res.status === 402 || msg === "scan_limit_reached") {
+          setLimitReached(true);
+          setScansRemaining(0);
+          setJobs((prev) =>
+            prev.map((j) =>
+              j.status === "queued" || j.id === jobId
+                ? { ...j, status: "error", error: "scan_limit_reached" }
+                : j,
+            ),
+          );
+          return;
+        }
         const rid = "reqId" in json && json.reqId ? ` (req ${json.reqId})` : "";
         setJobs((prev) =>
           prev.map((j) =>
@@ -283,6 +322,11 @@ export default function ScanPage() {
           ),
         );
         return;
+      }
+
+      if (typeof json.scansRemaining === "number") {
+        setScansRemaining(json.scansRemaining);
+        setLimitReached(json.scansRemaining <= 0);
       }
 
       setJobs((prev) =>
@@ -494,50 +538,95 @@ export default function ScanPage() {
         </p>
       </div>
 
-      <div className="card mt-3 !p-4">
-        <p className="text-sm font-semibold mb-2">Agregar fotos</p>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => cameraInputRef.current?.click()}
-            disabled={running}
-            className="btn btn-primary disabled:opacity-50"
-          >
-            <Camera className="w-4 h-4" /> Cámara
-          </button>
-          <button
-            onClick={() => galleryInputRef.current?.click()}
-            disabled={running}
-            className="btn btn-secondary disabled:opacity-50"
-          >
-            <ImagePlus className="w-4 h-4" /> Galería
-          </button>
+      {limitReached ? (
+        <div className="card mt-3 !p-5 border-orange-400/50 bg-orange-50/5">
+          <div className="flex items-start gap-3">
+            <div className="text-2xl">⚠️</div>
+            <div className="flex-1">
+              <p className="font-bold text-sm">Agotaste tus 30 escaneos gratis</p>
+              <p className="text-xs text-[color:var(--muted)] mt-1">
+                Cada escaneo usa la IA de Anthropic, que tiene costo. Para seguir
+                escaneando escribime por WhatsApp y coordinamos.
+              </p>
+              <div className="mt-3 grid gap-2">
+                <a
+                  href={`https://wa.me/${process.env.NEXT_PUBLIC_SCAN_LIMIT_WA_NUMBER ?? ""}?text=${encodeURIComponent("Hola! Quiero más escaneos para el álbum del Mundial 2026 🌍")}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn !bg-[#25D366] !border-[#25D366] text-white w-full justify-center"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  Escribir por WhatsApp
+                </a>
+                {process.env.NEXT_PUBLIC_SCAN_PACK_PRICE && (
+                  <p className="text-[11px] text-center text-[color:var(--muted)]">
+                    Pack de escaneos extra · {process.env.NEXT_PUBLIC_SCAN_PACK_PRICE}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
-        <input
-          ref={cameraInputRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={(e) => {
-            addFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <input
-          ref={galleryInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            addFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <p className="text-[11px] text-[color:var(--muted)] mt-2">
-          Podés agregar varias y se procesan en cola, una por una.
-        </p>
-      </div>
+      ) : (
+        <div className="card mt-3 !p-4">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold">Agregar fotos</p>
+            {scansRemaining !== null && (
+              <span
+                className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                  scansRemaining <= 5
+                    ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
+                    : "bg-[color:var(--primary)]/15 text-[color:var(--primary)]"
+                }`}
+              >
+                <Zap className="w-3 h-3 inline-block -mt-0.5 mr-0.5" />
+                {scansRemaining} restantes
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={running}
+              className="btn btn-primary disabled:opacity-50"
+            >
+              <Camera className="w-4 h-4" /> Cámara
+            </button>
+            <button
+              onClick={() => galleryInputRef.current?.click()}
+              disabled={running}
+              className="btn btn-secondary disabled:opacity-50"
+            >
+              <ImagePlus className="w-4 h-4" /> Galería
+            </button>
+          </div>
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              addFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={galleryInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              addFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <p className="text-[11px] text-[color:var(--muted)] mt-2">
+            Podés agregar varias y se procesan en cola, una por una.
+          </p>
+        </div>
+      )}
 
       {jobs.length > 0 && (
         <div className="mt-4">
@@ -663,7 +752,9 @@ function JobCard({
           )}
           {job.status === "error" && (
             <p className="text-xs text-[color:var(--accent)] mt-1 break-words">
-              {job.error}
+              {job.error === "scan_limit_reached"
+                ? "Límite de escaneos alcanzado"
+                : job.error}
             </p>
           )}
           {job.status === "done" && (
