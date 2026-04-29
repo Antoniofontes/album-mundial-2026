@@ -81,7 +81,9 @@ export type TradeOfferRow = {
   to_user_id: string;
   sticker_codes: string[];
   note: string | null;
-  status: "pending" | "accepted" | "cancelled" | "declined";
+  status: "pending" | "accepted" | "cancelled" | "declined" | "completed";
+  from_delivered_at: string | null;
+  to_delivered_at: string | null;
   created_at: string;
 };
 
@@ -178,6 +180,10 @@ export type Database = {
         Returns: undefined;
       };
       decline_trade_offer: {
+        Args: { p_offer_id: string };
+        Returns: undefined;
+      };
+      confirm_trade_delivery: {
         Args: { p_offer_id: string };
         Returns: undefined;
       };

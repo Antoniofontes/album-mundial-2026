@@ -5,10 +5,11 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { Profile, TradeOfferRow } from "@/lib/supabase/types";
 import { useCollection } from "@/lib/store";
-import { ArrowLeft, Check, Inbox, Send, XCircle } from "lucide-react";
+import { ArrowLeft, Check, Inbox, PackageCheck, Send, XCircle } from "lucide-react";
 
 export default function SolicitudesPage() {
   const reloadReservations = useCollection((s) => s.reloadReservations);
+  const loadCollection = useCollection((s) => s.load);
   const [uid, setUid] = useState<string | null>(null);
   const [offers, setOffers] = useState<TradeOfferRow[]>([]);
   const [profiles, setProfiles] = useState<Record<string, Profile>>({});
@@ -106,6 +107,22 @@ export default function SolicitudesPage() {
     }
   }
 
+  async function confirmDelivery(id: string) {
+    setBusyId(id);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.rpc("confirm_trade_delivery", { p_offer_id: id });
+      if (error) {
+        alert(error.message);
+        return;
+      }
+      await loadCollection();
+      await loadOffers();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   const incoming = useMemo(
     () =>
       uid ? offers.filter((o) => o.to_user_id === uid && o.status === "pending") : [],
@@ -115,6 +132,18 @@ export default function SolicitudesPage() {
   const outgoing = useMemo(
     () =>
       uid ? offers.filter((o) => o.from_user_id === uid && o.status === "pending") : [],
+    [offers, uid],
+  );
+
+  const inProgress = useMemo(
+    () =>
+      uid
+        ? offers.filter(
+            (o) =>
+              o.status === "accepted" &&
+              (o.from_user_id === uid || o.to_user_id === uid),
+          )
+        : [],
     [offers, uid],
   );
 
@@ -142,7 +171,8 @@ export default function SolicitudesPage() {
         <Inbox className="w-7 h-7" /> Solicitudes
       </h1>
       <p className="text-sm text-[color:var(--muted)] mt-1">
-        Aceptá para reservar las figuritas en tu álbum, o rechazá si no te sirve.
+        Aceptá para reservar las figuritas. Cuando se entreguen, ambos deben confirmar
+        para actualizar los álbumes.
       </p>
 
       {loading ? (
@@ -201,6 +231,82 @@ export default function SolicitudesPage() {
 
           <section className="mt-8">
             <h2 className="text-xs font-bold tracking-widest text-[color:var(--muted)] mb-2">
+              EN CURSO — CONFIRMAR ENTREGA ({inProgress.length})
+            </h2>
+            {inProgress.length === 0 ? (
+              <p className="text-sm text-[color:var(--muted)]">
+                No tenés intercambios aceptados pendientes de cierre.
+              </p>
+            ) : (
+              <ul className="grid gap-3">
+                {inProgress.map((o) => {
+                  const imFrom = o.from_user_id === uid;
+                  const peerId = imFrom ? o.to_user_id : o.from_user_id;
+                  const offererDone = Boolean(o.from_delivered_at);
+                  const recipientDone = Boolean(o.to_delivered_at);
+                  const iConfirmed = imFrom ? offererDone : recipientDone;
+                  return (
+                    <li key={o.id} className="card !p-3">
+                      <div className="flex items-start gap-2">
+                        <PackageCheck className="w-5 h-5 shrink-0 mt-0.5 opacity-80" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold">
+                            {imFrom ? `Para ${label(peerId)}` : `De ${label(peerId)}`}
+                          </div>
+                          <div className="text-xs text-[color:var(--muted)] mt-1">
+                            {o.sticker_codes.length} figuritas
+                            {o.note ? ` · ${o.note}` : ""}
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[11px]">
+                            <span
+                              className={
+                                offererDone
+                                  ? "text-green-600 dark:text-green-400"
+                                  : "text-[color:var(--muted)]"
+                              }
+                            >
+                              Quien ofrece: {offererDone ? "✓ entregó" : "pendiente"}
+                            </span>
+                            <span
+                              className={
+                                recipientDone
+                                  ? "text-green-600 dark:text-green-400"
+                                  : "text-[color:var(--muted)]"
+                              }
+                            >
+                              Quien recibe: {recipientDone ? "✓ recibió" : "pendiente"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary w-full mt-3 inline-flex items-center justify-center gap-2"
+                        disabled={busyId === o.id || iConfirmed}
+                        onClick={() => void confirmDelivery(o.id)}
+                      >
+                        <Check className="w-4 h-4" />
+                        {imFrom
+                          ? iConfirmed
+                            ? "Ya confirmaste la entrega"
+                            : "Confirmo que entregué"
+                          : iConfirmed
+                            ? "Ya confirmaste la recepción"
+                            : "Confirmo que recibí"}
+                      </button>
+                      <p className="text-[10px] text-[color:var(--muted)] mt-2">
+                        Cuando ambos confirmen, se suman las figuritas al álbum de quien recibe y se
+                        resta una copia a quien ofreció (si tenía).
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          <section className="mt-8">
+            <h2 className="text-xs font-bold tracking-widest text-[color:var(--muted)] mb-2">
               ENVIASTE ({outgoing.length})
             </h2>
             {outgoing.length === 0 ? (
@@ -243,11 +349,13 @@ export default function SolicitudesPage() {
                       {o.from_user_id === uid ? "Enviaste" : "Recibiste"} ·{" "}
                       {o.sticker_codes.length} ·{" "}
                       <span className="text-[color:var(--foreground)]">
-                        {o.status === "accepted"
-                          ? "Aceptada"
-                          : o.status === "declined"
-                            ? "Rechazada"
-                            : "Cancelada"}
+                        {o.status === "completed"
+                          ? "Completada"
+                          : o.status === "accepted"
+                            ? "Aceptada"
+                            : o.status === "declined"
+                              ? "Rechazada"
+                              : "Cancelada"}
                       </span>
                     </span>
                   </li>

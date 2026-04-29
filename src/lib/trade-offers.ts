@@ -31,6 +31,12 @@ export function spareDupesBeyondMarkedOwned(
   return out;
 }
 
+/** Orden del álbum para enviar al servidor */
+export function sortStickerCodesByAlbum(codes: Iterable<string>): string[] {
+  const want = new Set(codes);
+  return ALBUM.filter((s) => want.has(s.code)).map((s) => s.code);
+}
+
 /** Parsea texto libre (comas, espacios, saltos) y devuelve códigos válidos del álbum en orden de aparición en el álbum. */
 export function parseStickerCodesInput(raw: string): string[] {
   const parts = raw.split(/[\s,;\n\r]+/).map((s) => s.trim()).filter(Boolean);
